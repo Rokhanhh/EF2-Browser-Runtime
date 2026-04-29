@@ -43,7 +43,7 @@ When the game opens, choose **Google** login and sign in with the corresponding 
 
 ## Legal and Usage Notice
 
-This repository is intended for runtime research, interoperability testing, and personal experimentation.
+This repository is for personal use only.
 
 The game content, trademarks, and online services remain property of their respective owners.  
 Do not use this project to redistribute proprietary assets, bypass access controls, or violate the game publisher's terms of service.
