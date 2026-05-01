@@ -11,7 +11,7 @@ It is not a standalone game distribution: gameplay assets are resolved from remo
 ### Requirements
 
 - Python 3.10+
-- Google Chrome with an active Google account session (required to sign in with an existing account)
+- Google Chrome with an active Google or Apple account session (required to sign in with an existing account)
 
 ### Run
 
@@ -25,7 +25,7 @@ run_server.bat
 http://localhost:8080/endlessfrontier2/
 ```
 
-When the game opens, choose **Google** login and sign in with the corresponding Google account for your existing game data.
+When the game opens, choose **Google** or **Apple** login and sign in with the corresponding account for your existing game data.
 
 ## How It Works
 
