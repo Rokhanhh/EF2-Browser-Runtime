@@ -153,14 +153,16 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
-        normalized_path = normalize_app_path(urllib.parse.urlsplit(self.path).path)
-        if normalized_path in {"/", "/index.html"} and self._serve_bootstrap_index():
-            return
-        if self.path == "/":
+        request_path = urllib.parse.urlsplit(self.path).path
+        is_app_request = request_path == APP_BASE_PATH or request_path.startswith(APP_BASE_PATH + "/")
+        normalized_path = normalize_app_path(request_path)
+        if self.path == APP_BASE_PATH:
             self.send_response(302)
             self.send_header("Location", f"{APP_BASE_PATH}/")
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+        if is_app_request and normalized_path in {"/", "/index.html"} and self._serve_bootstrap_index():
             return
         if self.path.startswith(WS_PROXY_PREFIX):
             self._proxy_websocket()
@@ -168,35 +170,31 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         if self.path.startswith(PROXY_PREFIX):
             self._proxy_request("GET")
             return
-        if self.path in {"/__ef_bundle_status__", f"{APP_BASE_PATH}/__ef_bundle_status__"}:
+        if self.path == f"{APP_BASE_PATH}/__ef_bundle_status__":
             self._serve_bundle_status()
             return
-        if self.path == APP_BASE_PATH:
-            self.send_response(302)
-            self.send_header("Location", f"{APP_BASE_PATH}/")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
+        if not is_app_request:
+            self.send_error(404, "Use the configured app base path")
             return
         super().do_GET()
 
     def do_HEAD(self) -> None:
-        normalized_path = normalize_app_path(urllib.parse.urlsplit(self.path).path)
-        if normalized_path in {"/", "/index.html"} and self._serve_bootstrap_index(head_only=True):
-            return
-        if self.path == "/":
-            self.send_response(302)
-            self.send_header("Location", f"{APP_BASE_PATH}/")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-        if self.path.startswith(PROXY_PREFIX):
-            self._proxy_request("HEAD")
-            return
+        request_path = urllib.parse.urlsplit(self.path).path
+        is_app_request = request_path == APP_BASE_PATH or request_path.startswith(APP_BASE_PATH + "/")
+        normalized_path = normalize_app_path(request_path)
         if self.path == APP_BASE_PATH:
             self.send_response(302)
             self.send_header("Location", f"{APP_BASE_PATH}/")
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+        if is_app_request and normalized_path in {"/", "/index.html"} and self._serve_bootstrap_index(head_only=True):
+            return
+        if self.path.startswith(PROXY_PREFIX):
+            self._proxy_request("HEAD")
+            return
+        if not is_app_request:
+            self.send_error(404, "Use the configured app base path")
             return
         super().do_HEAD()
 
