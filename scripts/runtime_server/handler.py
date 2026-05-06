@@ -38,7 +38,7 @@ FORCE_GB_BOOTSTRAP_SCRIPT = """
     window.__EF_FORCE_GB__ = true;
     window.krMode = "n";
     window.CapacitorCustomPlatform = { name: "android" };
-    window.__EF_REMOTE_WS_ORIGIN__ = __EF_REMOTE_WS_ORIGIN__;
+    window.__EF_REMOTE_WS_ORIGIN__ = __EF_REMOTE_WS_ORIGIN_VALUE__;
 })();
 </script>
 """.strip()
@@ -236,7 +236,7 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
 
         html = index_path.read_text(encoding="utf-8")
         html = html.replace('"__EF_REMOTE_WS_ORIGIN__"', json.dumps(REMOTE_WS_ORIGIN))
-        html = html.replace("__EF_REMOTE_WS_ORIGIN__", json.dumps(REMOTE_WS_ORIGIN))
+        html = html.replace("'__EF_REMOTE_WS_ORIGIN__'", json.dumps(REMOTE_WS_ORIGIN))
         html = self._inject_force_gb_script(html)
         payload = html.encode("utf-8")
 
@@ -258,7 +258,9 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         if FORCE_GB_INJECTION_MARKER in html:
             return html
 
-        script_tag = FORCE_GB_BOOTSTRAP_SCRIPT.replace("__EF_REMOTE_WS_ORIGIN__", json.dumps(REMOTE_WS_ORIGIN)) + "\n"
+        script_tag = FORCE_GB_BOOTSTRAP_SCRIPT.replace(
+            "__EF_REMOTE_WS_ORIGIN_VALUE__", json.dumps(REMOTE_WS_ORIGIN)
+        ) + "\n"
         match = WEBLOADER_SCRIPT_PATTERN.search(html)
         if match:
             return html[: match.start()] + script_tag + html[match.start() :]
