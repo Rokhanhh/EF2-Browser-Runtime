@@ -2,6 +2,20 @@ const REMOTE_ORIGIN = "https://game.endlessfrontier.io";
 const REMOTE_WS_ORIGIN = window.__EF_REMOTE_WS_ORIGIN__ || "ws://game.endlessfrontier.io:5001";
 const PROXY_PREFIX = "/__ef_proxy__";
 const WS_PROXY_PREFIX = "/__ef_ws_proxy__";
+
+if (typeof window.__EF_FORCE_GB__ === "undefined") {
+    window.__EF_FORCE_GB__ = true;
+}
+if (typeof window.krMode === "undefined") {
+    window.krMode = "n";
+}
+if (typeof window.targetMode === "undefined") {
+    window.targetMode = "production";
+}
+if (!window.CapacitorCustomPlatform || typeof window.CapacitorCustomPlatform !== "object") {
+    window.CapacitorCustomPlatform = { name: "android" };
+}
+
 const FIREBASE_DEFAULT_CONFIG = {
     apiKey: "AIzaSyC_ZDJUKRitUUZIwYK3LPe1qqZooG3kL6A",
     authDomain: "endless-frontier-2.firebaseapp.com",

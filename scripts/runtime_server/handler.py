@@ -227,6 +227,7 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
 
         html = index_path.read_text(encoding="utf-8")
         html = html.replace('"__EF_REMOTE_WS_ORIGIN__"', json.dumps(REMOTE_WS_ORIGIN))
+        html = html.replace("__EF_REMOTE_WS_ORIGIN__", json.dumps(REMOTE_WS_ORIGIN))
         html = self._inject_force_gb_script(html)
         payload = html.encode("utf-8")
 
