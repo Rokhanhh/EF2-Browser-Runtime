@@ -365,22 +365,22 @@ async function loadManifest() {
     return response.json();
 }
 
-function loadCssFile(cssPath) {
+function loadCssFile(cssPath, cacheToken) {
     return new Promise((resolve, reject) => {
         const link = document.createElement("link");
         link.rel = "stylesheet";
-        link.href = `./${cssPath}`;
+        link.href = `./${cssPath}?v=${encodeURIComponent(cacheToken || Date.now().toString())}`;
         link.onload = resolve;
         link.onerror = () => reject(new Error(`Could not load ${cssPath}`));
         document.head.appendChild(link);
     });
 }
 
-function loadModule(modulePath) {
+function loadModule(modulePath, cacheToken) {
     return new Promise((resolve, reject) => {
         const script = document.createElement("script");
         script.type = "module";
-        script.src = `./${modulePath}`;
+        script.src = `./${modulePath}?v=${encodeURIComponent(cacheToken || Date.now().toString())}`;
         script.onload = resolve;
         script.onerror = () => reject(new Error(`Could not load ${modulePath}`));
         document.head.appendChild(script);
@@ -418,13 +418,13 @@ document.addEventListener("DOMContentLoaded", async () => {
             setLoaderState("loading-css");
             setStatus(`Loading bundle ${manifest.version || ""}...`);
             for (const cssPath of manifest.css) {
-                await loadCssFile(cssPath);
+                await loadCssFile(cssPath, manifest.version);
             }
         }
 
         setLoaderState("loading-module");
         setStatus("Loading game module...");
-        await loadModule(manifest.entry);
+        await loadModule(manifest.entry, manifest.version);
 
         setLoaderState("starting-game");
         setStatus("Starting game...");

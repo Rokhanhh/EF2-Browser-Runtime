@@ -103,10 +103,19 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(WEB_ROOT), **kwargs)
 
     def end_headers(self) -> None:
+        self._set_runtime_cache_headers()
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
         super().end_headers()
+
+    def _set_runtime_cache_headers(self) -> None:
+        request_path = urllib.parse.urlsplit(getattr(self, "path", "")).path
+        normalized_path = normalize_app_path(request_path)
+        if normalized_path in {"/game-manifest.json", "/assets/index.js", "/assets/index.css"}:
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
 
     def log_message(self, format: str, *args) -> None:
         if not SHOW_REQUEST_LOGS:
