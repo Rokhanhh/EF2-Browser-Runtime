@@ -9,8 +9,11 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from .config import BUNDLE_CACHE_ROOT, BUNDLE_INFO_URL_TEMPLATE
+from .config import BUNDLE_CACHE_ROOT
 from .logging_utils import log_bundle, log_error
+
+FORCED_BUNDLE_MODE = "live"
+BUNDLE_INFO_URL_BASE = "https://slime-checkinfo.s3.us-east-1.amazonaws.com/ef2_"
 
 
 def is_within_directory(path: Path, root: Path) -> bool:
@@ -242,7 +245,7 @@ def recover_cached_main_bundle(
 
             verify_checksum(candidate_path, str(cached_main_info.get("checksum") or ""))
             shutil.copy2(candidate_path, main_zip_path)
-            log_bundle(f"Using cached {main_file_name} from {cached_dir.name}")
+            log_bundle("Using cached main bundle")
             return {
                 "sourceVersion": cached_dir.name,
                 "fileName": main_file_name,
@@ -294,7 +297,7 @@ def recover_legacy_bundle(
 
             verify_checksum(candidate_path, bundle_checksum(cached_file_info))
             shutil.copy2(candidate_path, target_zip_path)
-            log_bundle(f"Using legacy cached {file_name} from {cached_dir.name}")
+            log_bundle("Using legacy cached bundle")
             return {
                 "source": "legacy-cache",
                 "sourceVersion": cached_dir.name,
@@ -332,10 +335,10 @@ def ensure_cached_bundle_zip(
     try:
         meta = cached_zip_is_valid(final_zip_path, meta_path, file_name)
         if meta:
-            log_bundle(f"Using cached {display_name}: {file_name}")
+            log_bundle(f"Using cached {display_name}")
             return final_zip_path, meta
     except Exception:
-        log_bundle(f"Cached {display_name} is invalid; rebuilding {version}")
+        log_bundle(f"Cached {display_name} is invalid; rebuilding")
         remove_tree(final_dir)
 
     temp_dir = Path(tempfile.mkdtemp(prefix="ef2-runtime-", dir=cache_root))
@@ -347,9 +350,9 @@ def ensure_cached_bundle_zip(
             checksum = str(recovered.get("checksum") or "")
         else:
             url = f"{base_url}/{bundle_mode}/{file_name}"
-            log_bundle(f"Downloading {display_name}: {file_name}")
+            log_bundle(f"Downloading {display_name} ({version})")
             download_file(url, temp_zip_path)
-            log_bundle(f"Verifying {display_name}: {file_name}")
+            log_bundle(f"Verifying {display_name} ({version})")
             verify_checksum(temp_zip_path, bundle_checksum(file_info))
             source = {"source": "remote"}
             checksum = bundle_checksum(file_info)
@@ -389,9 +392,7 @@ def ensure_cached_bundle_zip(
                 "source": "remote-cdn-mismatch",
                 "reason": "remote mainBundle checksum did not match downloaded CDN content",
             }
-            log_bundle(
-                f"Warning: CDN metadata mismatch for {file_name}; using verified zip content ({checksum})"
-            )
+            log_bundle("Warning: CDN metadata mismatch; using verified zip content")
         else:
             raise
 
@@ -427,20 +428,20 @@ def safe_extract_zip(zip_path: Path, target_dir: Path) -> None:
         archive.extractall(target_dir)
 
 
-def prepare_remote_bundle(bundle_mode: str) -> tuple[Path | None, dict[str, object]]:
-    bundle_info_url = BUNDLE_INFO_URL_TEMPLATE.format(bundle_mode=bundle_mode)
-    cache_root = BUNDLE_CACHE_ROOT / bundle_mode
+def prepare_remote_bundle() -> tuple[Path | None, dict[str, object]]:
+    bundle_mode = FORCED_BUNDLE_MODE
+    bundle_info_url = f"{BUNDLE_INFO_URL_BASE}{bundle_mode}/bundle.json"
+    cache_root = BUNDLE_CACHE_ROOT
     cache_root.mkdir(parents=True, exist_ok=True)
     cleanup_temp_dirs(cache_root)
-    log_bundle(f"Loading {bundle_mode}")
+    log_bundle("Loading bundle metadata")
 
     try:
         bundle_info = fetch_json(bundle_info_url)
     except Exception as error:
-        log_error("BUNDLE", f"Failed to load metadata: {error}")
+        log_error("BUNDLE", "Failed to load metadata")
         return None, {
             "source": "remote-unavailable",
-            "bundleMode": bundle_mode,
             "bundleInfoUrl": bundle_info_url,
             "error": str(error),
         }
@@ -460,15 +461,14 @@ def prepare_remote_bundle(bundle_mode: str) -> tuple[Path | None, dict[str, obje
     if merged_dir.exists():
         try:
             meta = validate_merged_cache(merged_dir, meta_path, bundle_info)
-        except Exception as error:
-            log_bundle(f"Merged bundle cache is invalid: {error}")
+        except Exception:
+            log_bundle("Merged bundle cache is invalid")
             meta = None
         if meta:
-            log_bundle(f"Using merged bundle cache: {remote_version}")
+            log_bundle(f"Using merged bundle cache ({remote_version})")
             meta.update(
                 {
                     "source": "remote-cache",
-                    "bundleMode": bundle_mode,
                     "bundleInfoUrl": bundle_info_url,
                     "bundleRoot": str(merged_dir),
                     "remoteVersion": remote_version,
@@ -484,7 +484,7 @@ def prepare_remote_bundle(bundle_mode: str) -> tuple[Path | None, dict[str, obje
             )
             cleanup_temp_dirs(cache_root)
             return merged_dir, meta
-        log_bundle(f"Rebuilding merged bundle: {remote_version}")
+        log_bundle("Rebuilding merged bundle")
         remove_tree(merged_dir)
 
     temp_dir = Path(tempfile.mkdtemp(prefix="ef2-runtime-", dir=cache_root))
@@ -493,7 +493,7 @@ def prepare_remote_bundle(bundle_mode: str) -> tuple[Path | None, dict[str, obje
         main_info = bundle_info["mainBundle"]
         update_info = bundle_info["updateBundle"]
 
-        log_bundle(f"Preparing {remote_version}")
+        log_bundle(f"Preparing bundle {remote_version}")
         update_zip_path = None
         update_meta = None
         if str(update_info.get("fileName") or "") != str(main_info.get("fileName") or ""):
@@ -532,7 +532,6 @@ def prepare_remote_bundle(bundle_mode: str) -> tuple[Path | None, dict[str, obje
 
         meta = {
             "source": "remote",
-            "bundleMode": bundle_mode,
             "bundleInfoUrl": bundle_info_url,
             "bundleRoot": str(merged_dir),
             "remoteVersion": remote_version,
@@ -558,14 +557,13 @@ def prepare_remote_bundle(bundle_mode: str) -> tuple[Path | None, dict[str, obje
             remote_version,
         )
         cleanup_temp_dirs(cache_root)
-        log_bundle(f"Ready {remote_version}")
+        log_bundle(f"Ready Bundle {remote_version}")
         return merged_dir, meta
     except Exception as error:
         remove_tree(temp_dir)
-        log_error("BUNDLE", f"Failed to prepare: {error}")
+        log_error("BUNDLE", "Failed to prepare bundle")
         return None, {
             "source": "remote-error",
-            "bundleMode": bundle_mode,
             "bundleInfoUrl": bundle_info_url,
             "remoteVersion": remote_version,
             "error": str(error),

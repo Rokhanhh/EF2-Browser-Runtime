@@ -10,11 +10,11 @@ import ssl
 import urllib.parse
 import threading
 
-from . import state
 from .config import (
     APP_BASE_PATH,
     PROXY_PREFIX,
     REMOTE_BASE,
+    REMOTE_WS_ORIGIN,
     SHOW_ASSET_REQUEST_LOGS,
     SHOW_REQUEST_LOGS,
     WS_PROXY_PREFIX,
@@ -38,6 +38,7 @@ FORCE_GB_BOOTSTRAP_SCRIPT = """
     window.__EF_FORCE_GB__ = true;
     window.krMode = "n";
     window.CapacitorCustomPlatform = { name: "android" };
+    window.__EF_REMOTE_WS_ORIGIN__ = __EF_REMOTE_WS_ORIGIN__;
 })();
 </script>
 """.strip()
@@ -170,9 +171,6 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         if self.path.startswith(PROXY_PREFIX):
             self._proxy_request("GET")
             return
-        if self.path == f"{APP_BASE_PATH}/__ef_bundle_status__":
-            self._serve_bundle_status()
-            return
         if not is_app_request:
             self.send_error(404, "Use the configured app base path")
             return
@@ -222,23 +220,13 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             return
         self.send_error(405, "DELETE only supported for proxy routes")
 
-    def _serve_bundle_status(self) -> None:
-        payload = json.dumps(state.ACTIVE_BUNDLE_META, indent=2).encode("utf-8")
-        self._write_response(
-            200,
-            payload,
-            {
-                "Content-Type": "application/json; charset=utf-8",
-                "Cache-Control": "no-store",
-            },
-        )
-
     def _serve_bootstrap_index(self, head_only: bool = False) -> bool:
         index_path = WEB_ROOT / "index.html"
         if not index_path.exists():
             return False
 
         html = index_path.read_text(encoding="utf-8")
+        html = html.replace('"__EF_REMOTE_WS_ORIGIN__"', json.dumps(REMOTE_WS_ORIGIN))
         html = self._inject_force_gb_script(html)
         payload = html.encode("utf-8")
 
@@ -260,7 +248,7 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         if FORCE_GB_INJECTION_MARKER in html:
             return html
 
-        script_tag = FORCE_GB_BOOTSTRAP_SCRIPT + "\n"
+        script_tag = FORCE_GB_BOOTSTRAP_SCRIPT.replace("__EF_REMOTE_WS_ORIGIN__", json.dumps(REMOTE_WS_ORIGIN)) + "\n"
         match = WEBLOADER_SCRIPT_PATTERN.search(html)
         if match:
             return html[: match.start()] + script_tag + html[match.start() :]

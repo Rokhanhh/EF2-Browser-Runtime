@@ -31,7 +31,7 @@ When the game opens, choose **Google** or **Apple** login and sign in with the c
 
 - On startup, the server downloads bundle metadata (`bundle.json`).
 - It validates and caches `mainBundle` and `updateBundle` ZIP files.
-- It extracts and merges them into a ready-to-serve runtime bundle under `runtime/bundles/<mode>/merged/<version>/`.
+- It extracts and merges them into a ready-to-serve runtime bundle under `runtime/bundles/merged/<version>/`.
 - Static bundle content is served locally, while remote API/WebSocket traffic is proxied to avoid browser-origin issues.
 
 

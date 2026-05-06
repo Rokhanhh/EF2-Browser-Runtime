@@ -10,7 +10,6 @@ import time
 from . import state
 from .bundle import prepare_remote_bundle
 from .config import (
-    APP_BASE_PATH,
     HEARTBEAT_INTERVAL_SECONDS,
     LISTEN_PORT,
     RUNTIME_ROOT,
@@ -20,20 +19,17 @@ from .config import (
 from .handler import RuntimeHandler
 from .logging_utils import log_credits, log_server
 
-FORCED_BUNDLE_MODE = "live"
-
-
-def start_server_heartbeat(port: int) -> None:
+def start_server_heartbeat() -> None:
     if not SHOW_HEARTBEAT_LOGS:
         return
 
     bundle_version = state.get_active_bundle_version()
-    log_server(f"Up | http://localhost:{port}{APP_BASE_PATH}/ | bundle {bundle_version}")
+    log_server(f"Up | Bundle {bundle_version}")
 
     def heartbeat_loop() -> None:
         while True:
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
-            log_server(f"Alive | http://localhost:{port}{APP_BASE_PATH}/ | bundle {bundle_version}")
+            log_server("Alive")
 
     thread = threading.Thread(target=heartbeat_loop, name="server-heartbeat", daemon=True)
     thread.start()
@@ -45,10 +41,9 @@ def main() -> None:
     args = parser.parse_args()
 
     log_credits("Endless Frontier 2 Browser Runtime | Made by Rokhan")
-    log_server(f"Bundle mode forced to: {FORCED_BUNDLE_MODE}")
 
     RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
-    state.set_active_bundle(*prepare_remote_bundle(FORCED_BUNDLE_MODE))
+    state.set_active_bundle(*prepare_remote_bundle())
 
     class ThreadingTCPServer(socketserver.ThreadingTCPServer):
         allow_reuse_address = True
@@ -71,7 +66,7 @@ def main() -> None:
 
         log_server(f"Request logs: {'ON' if SHOW_REQUEST_LOGS else 'OFF'}")
         log_server("Press Ctrl+C to stop")
-        start_server_heartbeat(args.port)
+        start_server_heartbeat()
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

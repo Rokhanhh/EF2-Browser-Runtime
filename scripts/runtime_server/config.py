@@ -47,12 +47,7 @@ if not isinstance(LOGGING_CONFIG, dict):
     LOGGING_CONFIG = {}
 
 REMOTE_BASE = str(CONFIG.get("remoteBase", "https://game.endlessfrontier.io"))
-BUNDLE_INFO_URL_TEMPLATE = str(
-    CONFIG.get(
-        "bundleInfoUrlTemplate",
-        "https://slime-checkinfo.s3.us-east-1.amazonaws.com/ef2_{bundle_mode}/bundle.json",
-    )
-)
+REMOTE_WS_ORIGIN = str(CONFIG.get("remoteWsOrigin", "ws://game.endlessfrontier.io:5001"))
 PROXY_PREFIX = str(CONFIG.get("proxyPrefix", "/__ef_proxy__"))
 WS_PROXY_PREFIX = str(CONFIG.get("wsProxyPrefix", "/__ef_ws_proxy__"))
 APP_BASE_PATH = str(CONFIG.get("appBasePath", "/endlessfrontier2"))

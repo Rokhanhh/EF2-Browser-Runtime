@@ -1,5 +1,5 @@
 const REMOTE_ORIGIN = "https://game.endlessfrontier.io";
-const REMOTE_WS_ORIGIN = "ws://game.endlessfrontier.io:5001";
+const REMOTE_WS_ORIGIN = window.__EF_REMOTE_WS_ORIGIN__ || "ws://game.endlessfrontier.io:5001";
 const PROXY_PREFIX = "/__ef_proxy__";
 const WS_PROXY_PREFIX = "/__ef_ws_proxy__";
 const FIREBASE_DEFAULT_CONFIG = {
@@ -430,7 +430,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                 "",
                 error && error.message ? error.message : String(error),
                 "",
-                "Check /__ef_bundle_status__ and the local server console.",
+                "Check the local server console.",
             ].join("\n")
         );
     }

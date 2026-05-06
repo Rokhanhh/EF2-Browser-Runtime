@@ -1,7 +1,7 @@
 {
   "remoteBase": "https://game.endlessfrontier.io",
+  "remoteWsOrigin": "ws://game.endlessfrontier.io:5001",
   "listenPort": 8080,
-  "bundleInfoUrlTemplate": "https://slime-checkinfo.s3.us-east-1.amazonaws.com/ef2_{bundle_mode}/bundle.json",
   "proxyPrefix": "/__ef_proxy__",
   "wsProxyPrefix": "/__ef_ws_proxy__",
   "appBasePath": "/endlessfrontier2",
