@@ -10,6 +10,7 @@ import ssl
 import urllib.parse
 import threading
 
+from . import state
 from .config import (
     APP_BASE_PATH,
     PROXY_PREFIX,
@@ -20,6 +21,7 @@ from .config import (
     WS_PROXY_PREFIX,
     WEB_ROOT,
 )
+from .bundle import prepare_remote_bundle
 from .logging_utils import log_error, log_http
 from .static_files import choose_static_path, is_within_directory, normalize_app_path
 
@@ -42,6 +44,7 @@ FORCE_GB_BOOTSTRAP_SCRIPT = """
 })();
 </script>
 """.strip()
+INTEGRITY_CHECK_PATHS = {"/", "/index.html", "/game-manifest.json", "/assets/index.js"}
 
 
 def is_client_disconnect(error: BaseException) -> bool:
@@ -172,8 +175,11 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        if is_app_request and normalized_path in {"/", "/index.html"} and self._serve_bootstrap_index():
-            return
+        if is_app_request and normalized_path in INTEGRITY_CHECK_PATHS:
+            state.ensure_active_bundle_integrity(prepare_remote_bundle)
+        if is_app_request and normalized_path in {"/", "/index.html"}:
+            if self._serve_bootstrap_index():
+                return
         if self.path.startswith(WS_PROXY_PREFIX):
             self._proxy_websocket()
             return
@@ -195,8 +201,11 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        if is_app_request and normalized_path in {"/", "/index.html"} and self._serve_bootstrap_index(head_only=True):
-            return
+        if is_app_request and normalized_path in INTEGRITY_CHECK_PATHS:
+            state.ensure_active_bundle_integrity(prepare_remote_bundle)
+        if is_app_request and normalized_path in {"/", "/index.html"}:
+            if self._serve_bootstrap_index(head_only=True):
+                return
         if self.path.startswith(PROXY_PREFIX):
             self._proxy_request("HEAD")
             return

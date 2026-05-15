@@ -65,10 +65,6 @@ def log_bundle(message: str) -> None:
     print(f"{build_log_prefix('BUNDLE', ANSI_YELLOW)} {message}")
 
 
-def log_warning(channel: str, message: str) -> None:
-    print(f"{build_log_prefix(channel, ANSI_YELLOW)} {message}")
-
-
 def log_error(channel: str, message: str) -> None:
     print(f"{build_log_prefix(channel, ANSI_RED)} {message}")
 
