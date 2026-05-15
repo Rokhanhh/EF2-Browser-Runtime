@@ -1,6 +1,7 @@
 import { ensureBrowserGlobals } from "./globals.js";
 import { callGameStart, loadCssFile, loadManifest, loadModule } from "./loader.js";
 import { setLoaderState, setStatus, showError } from "./ui.js";
+import { attachWaveTracker } from "./wave-tracker/index.js";
 
 async function waitForSplashFirstPaint() {
     // Let the splash render before loading the heavy game module.
@@ -35,6 +36,17 @@ async function bootstrapRuntime() {
         setStatus(`Loading bundle ${manifest.version || ""}...`);
         for (const cssPath of manifest.css) {
             await loadCssFile(cssPath, manifest.version);
+        }
+    }
+
+    if (!window.__EF_WAVE_TRACKER_HANDLE__) {
+        try {
+            window.__EF_WAVE_TRACKER_HANDLE__ = attachWaveTracker({
+                scanWarnMs: 15000,
+                scanHardTimeoutMs: null
+            });
+        } catch (error) {
+            console.warn("[ef-runtime] wave tracker install failed:", error);
         }
     }
 
