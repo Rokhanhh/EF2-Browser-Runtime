@@ -7,125 +7,7 @@
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     >
     <title>Endless Frontier 2</title>
-    <style>
-        :root {
-            color-scheme: dark;
-        }
-
-        * {
-            box-sizing: border-box;
-            -webkit-user-select: none;
-            user-select: none;
-            -webkit-touch-callout: none;
-            -webkit-tap-highlight-color: transparent;
-        }
-
-        html, body {
-            margin: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background: #000;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-        }
-
-        body {
-            position: fixed;
-            inset: 0;
-        }
-
-        canvas {
-            position: absolute;
-            inset: 0;
-            width: 100% !important;
-            height: 100% !important;
-            display: block;
-            touch-action: none;
-        }
-
-        #splash {
-            position: fixed;
-            inset: 0;
-            z-index: 9999;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background:
-                radial-gradient(circle at top, rgba(48, 92, 70, 0.45), transparent 40%),
-                linear-gradient(180deg, #08110d 0%, #000000 70%);
-            color: #eef7f0;
-        }
-
-        .panel {
-            width: min(92vw, 520px);
-            padding: 28px 24px;
-            border: 1px solid rgba(182, 226, 196, 0.14);
-            border-radius: 18px;
-            background: rgba(5, 11, 8, 0.82);
-            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
-            text-align: center;
-        }
-
-        .title {
-            margin: 0 0 10px;
-            font-size: 28px;
-            font-weight: 700;
-            letter-spacing: 0.04em;
-        }
-
-        .subtitle {
-            margin: 0 0 22px;
-            color: rgba(238, 247, 240, 0.72);
-            font-size: 13px;
-        }
-
-        .status {
-            margin: 0 0 18px;
-            min-height: 20px;
-            color: #d7f4de;
-            font-size: 14px;
-        }
-
-        .bar {
-            width: 100%;
-            height: 10px;
-            overflow: hidden;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.08);
-        }
-
-        .bar-fill {
-            width: 20%;
-            height: 100%;
-            border-radius: 999px;
-            background: linear-gradient(90deg, #4fc38d, #94f1c5);
-            animation: idle 1.8s ease-in-out infinite;
-            transform-origin: left center;
-        }
-
-        .hint {
-            margin: 16px 0 0;
-            color: rgba(238, 247, 240, 0.54);
-            font-size: 12px;
-        }
-
-        .fade-out {
-            animation: fade-out 0.28s ease-out forwards;
-        }
-
-        @keyframes idle {
-            0% { transform: translateX(-120%) scaleX(0.7); }
-            50% { transform: translateX(120%) scaleX(1); }
-            100% { transform: translateX(420%) scaleX(0.8); }
-        }
-
-        @keyframes fade-out {
-            to {
-                opacity: 0;
-                visibility: hidden;
-            }
-        }
-    </style>
+    <link rel="stylesheet" href="./assets/styles/splash.css">
     <script>
         (function installEarlyWebSocketProxy() {
             const remoteOrigin = "__EF_REMOTE_WS_ORIGIN__";
@@ -166,36 +48,29 @@
             window.__EF_NATIVE_WEBSOCKET__ = NativeWebSocket;
         })();
     </script>
-    <script src="./webLoader.js?v=ws-proxy-2"></script>
+    <script src="./bootstrap/webLoader.js?v=ws-proxy-2"></script>
 </head>
 <body>
     <div id="splash">
         <div class="panel">
-            <h1 class="title">Endless Frontier 2</h1>
-            <p class="subtitle">Minimal browser bootstrap</p>
+            <h1 class="title">Endless Frontier 2<br>Browser Project</h1>
+            <p class="subtitle">Made by Rokhan</p>
             <p class="status" id="status-text">Preparing runtime...</p>
             <div class="bar">
                 <div class="bar-fill"></div>
             </div>
-            <p class="hint">The game bundle is downloaded by the local server runtime.</p>
+            <button id="start-game-btn" class="start-btn" type="button">Start Game</button>
+            <div class="actions">
+                <p class="server-status" id="server-status-text">Server Status: <span class="status-inactive">Checking...</span></p>
+                <p class="version" id="version-text">Version: --</p>
+            </div>
+            <button id="clear-cache-btn" class="ghost-btn" type="button">Clear Cache</button>
         </div>
     </div>
 
     <div id="app"></div>
     <div id="htmlOverlay"></div>
 
-    <script>
-        window.updateSplashStatus = function (text) {
-            const node = document.getElementById("status-text");
-            if (node) node.textContent = text;
-        };
-
-        window.hideSplashScreen = function () {
-            const splash = document.getElementById("splash");
-            if (!splash) return;
-            splash.classList.add("fade-out");
-            setTimeout(() => splash.remove(), 280);
-        };
-    </script>
+    <script src="./assets/scripts/splash.js"></script>
 </body>
 </html>

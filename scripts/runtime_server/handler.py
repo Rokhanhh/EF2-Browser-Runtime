@@ -33,7 +33,10 @@ UPSTREAM_POOL_LOCK = threading.Lock()
 UPSTREAM_POOL: dict[tuple[str, str, int], list[http.client.HTTPConnection]] = {}
 UPSTREAM_HTTPS_CONTEXT = ssl.create_default_context()
 FORCE_GB_INJECTION_MARKER = "__EF_FORCE_GB__"
-WEBLOADER_SCRIPT_PATTERN = re.compile(r'<script\s+src=["\']\.\/webLoader\.js[^"\']*["\']>\s*</script>', re.IGNORECASE)
+WEBLOADER_SCRIPT_PATTERN = re.compile(
+    r'<script\s+src=["\']\.\/(?:bootstrap\/)?webLoader\.js[^"\']*["\']>\s*</script>',
+    re.IGNORECASE,
+)
 FORCE_GB_BOOTSTRAP_SCRIPT = """
 <script>
 (function forceGbRuntimeMode() {

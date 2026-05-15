@@ -2,12 +2,33 @@ import { ensureBrowserGlobals } from "./globals.js";
 import { callGameStart, loadCssFile, loadManifest, loadModule } from "./loader.js";
 import { setLoaderState, setStatus, showError } from "./ui.js";
 
+async function waitForSplashFirstPaint() {
+    // Let the splash render before loading the heavy game module.
+    await new Promise(resolve => window.requestAnimationFrame(() => resolve()));
+    await new Promise(resolve => window.requestAnimationFrame(() => resolve()));
+}
+
+async function waitForStartButton() {
+    if (typeof window.waitForStartGame === "function") {
+        await window.waitForStartGame();
+    }
+}
+
 async function bootstrapRuntime() {
     setLoaderState("loading-manifest");
     setStatus("Preparing runtime...");
 
     const manifest = await loadManifest();
+    if (typeof window.updateSplashVersion === "function") {
+        window.updateSplashVersion(manifest.version || "unknown");
+    }
     ensureBrowserGlobals(manifest.version || "0.0.0");
+
+    setLoaderState("awaiting-start");
+    setStatus("Press Start Game");
+
+    await waitForSplashFirstPaint();
+    await waitForStartButton();
 
     if (Array.isArray(manifest.css)) {
         setLoaderState("loading-css");
@@ -51,4 +72,3 @@ export function startRuntime() {
     }
     run();
 }
-
