@@ -4,9 +4,20 @@ import { createWaveOverlay } from "./overlay.js";
 
 const WRAPPED_MARKER = "__efWaveCheckProgressWrapped";
 const MIN_VALID_WAVE_MS = 70;
+const ROLLING_SHORT_WAVE_WINDOW = 10;
 const ROLLING_WAVE_WINDOW = 100;
-const REBIRTH_WAVE_DROP_THRESHOLD = 10;
 const REBIRTH_TIER_STORAGE_KEY = "__EF_HERO_REBIRTH_MEDAL_TIER_CACHE__";
+
+function parseTimeMs(value) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return value > 0 && value < 100000000000 ? value * 1000 : value;
+    }
+    if (typeof value === "string" && value.trim()) {
+        const parsed = new Date(value).getTime();
+        return Number.isFinite(parsed) ? parsed : NaN;
+    }
+    return NaN;
+}
 
 function isValidController(candidate) {
     if (!candidate || typeof candidate !== "object") {
@@ -117,6 +128,108 @@ function getMedalsAtCurrentWave(wave) {
     return { wave: targetWave, medal: NaN };
 }
 
+function getRebirthMedalEntries() {
+    const store = getRebirthTierStore();
+    if (!store || typeof store !== "object") {
+        return [];
+    }
+
+    if (Array.isArray(store.entries) && store.entries.length > 0) {
+        return store.entries
+            .map((entry) => [Number(entry?.[0]), Number(entry?.[1])])
+            .filter(([wave, medal]) => Number.isFinite(wave) && Number.isFinite(medal))
+            .sort((a, b) => a[0] - b[0]);
+    }
+
+    const waveToMedal = store.waveToMedal && typeof store.waveToMedal === "object"
+        ? store.waveToMedal
+        : null;
+    if (!waveToMedal) {
+        return [];
+    }
+
+    return Object.entries(waveToMedal)
+        .map(([wave, medal]) => [Number(wave), Number(medal)])
+        .filter(([wave, medal]) => Number.isFinite(wave) && Number.isFinite(medal))
+        .sort((a, b) => a[0] - b[0]);
+}
+
+function createMedalMpmState({
+    wave,
+    maxWave,
+    rebirthTimeSec,
+    waveTimeSec,
+    waveAvg10Sec,
+    waveAvg100Sec,
+    waveAvgTimeSec,
+    wpm,
+    wpmReady,
+    medalsAtCurrentWave
+}) {
+    const currentMedal = Number(medalsAtCurrentWave?.medal);
+    const currentMinutes = rebirthTimeSec / 60;
+    const currentMpm = Number.isFinite(currentMedal) && currentMedal > 0 && currentMinutes > 0
+        ? currentMedal / currentMinutes
+        : NaN;
+
+    let estimatedWaveTimeSec = NaN;
+    const waveTimeCandidates = [waveAvg10Sec, waveAvg100Sec, waveAvgTimeSec]
+        .filter((value) => Number.isFinite(value) && value > 0);
+    if (waveTimeCandidates.length > 0) {
+        estimatedWaveTimeSec = Math.max(...waveTimeCandidates);
+    } else if (wpmReady && Number.isFinite(wpm) && wpm > 0) {
+        estimatedWaveTimeSec = 60 / wpm;
+    }
+
+    const state = {
+        currentMpm,
+        projectedMpm: NaN,
+        targetWave: NaN,
+        etaSec: NaN,
+        recommendation: "warming up"
+    };
+
+    if (!Number.isFinite(wave) || !Number.isFinite(currentMpm) || currentMpm <= 0) {
+        return state;
+    }
+
+    if (!Number.isFinite(estimatedWaveTimeSec) || estimatedWaveTimeSec <= 0) {
+        state.recommendation = "need speed";
+        return state;
+    }
+    const currentWaveElapsedSec = Number.isFinite(waveTimeSec) && waveTimeSec > 0 ? waveTimeSec : 0;
+    const effectiveCurrentWaveTimeSec = Math.max(estimatedWaveTimeSec, currentWaveElapsedSec);
+
+    const projectionLimitWave = Number.isFinite(maxWave) && maxWave > wave ? maxWave : Infinity;
+    const entries = getRebirthMedalEntries();
+    let bestProjectedMpm = currentMpm;
+    let bestTargetWave = Number(medalsAtCurrentWave?.wave);
+    let bestEtaSec = 0;
+
+    for (const [targetWave, targetMedal] of entries) {
+        if (targetWave <= wave || targetWave > projectionLimitWave || targetMedal <= currentMedal) {
+            continue;
+        }
+        const etaSec = effectiveCurrentWaveTimeSec + Math.max(0, targetWave - wave - 1) * estimatedWaveTimeSec;
+        const projectedMinutes = (rebirthTimeSec + etaSec) / 60;
+        if (projectedMinutes <= 0) {
+            continue;
+        }
+        const projectedMpm = targetMedal / projectedMinutes;
+        if (projectedMpm > bestProjectedMpm) {
+            bestProjectedMpm = projectedMpm;
+            bestTargetWave = targetWave;
+            bestEtaSec = etaSec;
+        }
+    }
+
+    state.projectedMpm = bestProjectedMpm;
+    state.targetWave = bestTargetWave;
+    state.etaSec = bestEtaSec;
+    state.recommendation = bestProjectedMpm > currentMpm * 1.01 ? "continue" : "rebirth";
+    return state;
+}
+
 export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null } = {}) {
     const overlay = createWaveOverlay();
     const metrics = createWaveMetrics();
@@ -132,6 +245,8 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
     let trackedWaveStartedAt = performance.now();
     let maxWave = NaN;
     let profileWave = NaN;
+    let profileLastReviveTimeMs = NaN;
+    let hasProfileLastReviveBaseline = false;
     let validCompletedWaveCount = 0;
     let validCompletedWaveTotalMs = 0;
     const recentValidWaveDurationsMs = [];
@@ -168,6 +283,29 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
         skippedWaves = 0;
     }
 
+    function updateProfileLastReviveTime(value) {
+        const parsedLastReviveTimeMs = parseTimeMs(value);
+        if (!Number.isFinite(parsedLastReviveTimeMs) || parsedLastReviveTimeMs <= 0) {
+            return;
+        }
+
+        if (!hasProfileLastReviveBaseline) {
+            profileLastReviveTimeMs = parsedLastReviveTimeMs;
+            hasProfileLastReviveBaseline = true;
+            return;
+        }
+
+        if (parsedLastReviveTimeMs > profileLastReviveTimeMs + 5000) {
+            profileLastReviveTimeMs = parsedLastReviveTimeMs;
+            resetSessionStats(performance.now(), profileWave);
+            return;
+        }
+
+        if (parsedLastReviveTimeMs > profileLastReviveTimeMs) {
+            profileLastReviveTimeMs = parsedLastReviveTimeMs;
+        }
+    }
+
     function installJsonProfileObserver() {
         const nativeParse = JSON.parse;
 
@@ -184,6 +322,7 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
                     if (Number.isFinite(parsedWave)) {
                         profileWave = parsedWave;
                     }
+                    updateProfileLastReviveTime(user.lastReviveTime);
                 }
             } catch (error) {
                 // Keep parser stable.
@@ -210,12 +349,6 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
             const result = original.apply(this, args);
             const wave = Number(this.getCurrentWave());
             const now = performance.now();
-            if (Number.isFinite(trackedWave) && Number.isFinite(wave)) {
-                const waveDrop = trackedWave - wave;
-                if (hasWaveBaseline && waveDrop >= REBIRTH_WAVE_DROP_THRESHOLD) {
-                    resetSessionStats(now, wave);
-                }
-            }
 
             if (trackedWave === null || wave !== trackedWave) {
                 if (trackedWave !== null && Number.isFinite(trackedWave) && hasWaveBaseline) {
@@ -245,37 +378,52 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
             const waveAvgTimeSec = validCompletedWaveCount > 0
                 ? (validCompletedWaveTotalMs / validCompletedWaveCount) / 1000
                 : NaN;
+            const waveAvg10Sec = recentValidWaveDurationsMs.length > 0
+                ? (() => {
+                    const values = recentValidWaveDurationsMs.slice(-ROLLING_SHORT_WAVE_WINDOW);
+                    return (values.reduce((acc, value) => acc + value, 0) / values.length) / 1000;
+                })()
+                : NaN;
             const waveAvg100Sec = recentValidWaveDurationsMs.length > 0
                 ? (recentValidWaveDurationsMs.reduce((acc, value) => acc + value, 0) / recentValidWaveDurationsMs.length) / 1000
                 : NaN;
-            const waveP95Sec = recentValidWaveDurationsMs.length > 0
-                ? (() => {
-                    const sorted = [...recentValidWaveDurationsMs].sort((a, b) => a - b);
-                    const idx = Math.min(
-                        sorted.length - 1,
-                        Math.max(0, Math.ceil(0.95 * sorted.length) - 1)
-                    );
-                    return sorted[idx] / 1000;
-                })()
+            const nowWallMs = Date.now();
+            const profileRebirthTimeSec = Number.isFinite(profileLastReviveTimeMs)
+                ? Math.max(0, (nowWallMs - profileLastReviveTimeMs) / 1000)
                 : NaN;
-            const rebirthTimeSec = Math.max(0, (now - rebirthStartedAt) / 1000);
+            const rebirthTimeSec = Number.isFinite(profileRebirthTimeSec)
+                ? profileRebirthTimeSec
+                : Math.max(0, (now - rebirthStartedAt) / 1000);
             const medalsAtCurrentWave = getMedalsAtCurrentWave(wave);
 
             metrics.addSample(wave);
             if (now - lastOverlayAt >= 50) {
                 lastOverlayAt = now;
                 const wpmState = metrics.getWpmState(now);
+                const medalMpmState = createMedalMpmState({
+                    wave,
+                    maxWave,
+                    rebirthTimeSec,
+                    waveTimeSec,
+                    waveAvg10Sec,
+                    waveAvg100Sec,
+                    waveAvgTimeSec,
+                    medalsAtCurrentWave,
+                    wpm: wpmState.wpm,
+                    wpmReady: wpmState.ready
+                });
                 overlay.setBattle({
                     wave,
                     maxWave,
                     rebirthTimeSec,
                     waveTimeSec,
                     waveAvgTimeSec,
+                    waveAvg10Sec,
                     waveAvg100Sec,
-                    waveP95Sec,
                     completedWaves,
                     skippedWaves,
                     medalsAtCurrentWave,
+                    medalMpmState,
                     wpm: wpmState.wpm,
                     wpmReady: wpmState.ready
                 });
@@ -295,18 +443,34 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
 
         const initialDisplayWave = Number.isFinite(initialWave) ? initialWave : profileWave;
         const medalsAtCurrentWave = getMedalsAtCurrentWave(initialDisplayWave);
+        const initialRebirthTimeSec = Number.isFinite(profileLastReviveTimeMs)
+            ? Math.max(0, (Date.now() - profileLastReviveTimeMs) / 1000)
+            : 0;
+        const initialMedalMpmState = createMedalMpmState({
+            wave: initialDisplayWave,
+            maxWave,
+            rebirthTimeSec: initialRebirthTimeSec,
+            waveTimeSec: 0,
+            waveAvg100Sec: NaN,
+            waveAvg10Sec: NaN,
+            waveAvgTimeSec: NaN,
+            medalsAtCurrentWave,
+            wpm: 0,
+            wpmReady: false
+        });
         metrics.addSample(initialDisplayWave);
         overlay.setBattle({
             wave: initialDisplayWave,
             maxWave,
-            rebirthTimeSec: 0,
+            rebirthTimeSec: initialRebirthTimeSec,
             waveTimeSec: 0,
             waveAvgTimeSec: 0,
+            waveAvg10Sec: NaN,
             waveAvg100Sec: NaN,
-            waveP95Sec: NaN,
             completedWaves: 0,
             skippedWaves: 0,
             medalsAtCurrentWave,
+            medalMpmState: initialMedalMpmState,
             wpm: 0,
             wpmReady: false
         });
