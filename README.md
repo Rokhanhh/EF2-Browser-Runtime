@@ -11,7 +11,7 @@ It is not a standalone game distribution: gameplay assets are resolved from remo
 ### Requirements
 
 - Python 3.10+
-- Google Chrome with an active Google or Apple account session (required to sign in with an existing account)
+- Browser with an active Google or Apple account session (required to sign in with an existing account). Firefox is recommended.
 
 ### Run
 
