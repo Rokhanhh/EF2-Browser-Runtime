@@ -6,6 +6,7 @@ const WRAPPED_MARKER = "__efWaveCheckProgressWrapped";
 const MIN_VALID_WAVE_MS = 70;
 const ROLLING_WAVE_WINDOW = 100;
 const REBIRTH_WAVE_DROP_THRESHOLD = 10;
+const REBIRTH_TIER_STORAGE_KEY = "__EF_HERO_REBIRTH_MEDAL_TIER_CACHE__";
 
 function isValidController(candidate) {
     if (!candidate || typeof candidate !== "object") {
@@ -32,6 +33,90 @@ function isValidController(candidate) {
     }
 }
 
+function getRebirthTierStore() {
+    if (!window.__EF_HERO_REBIRTH_MEDAL_TIER__) {
+        try {
+            const raw = window.localStorage.getItem(REBIRTH_TIER_STORAGE_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === "object" && parsed.byVersion && typeof parsed.byVersion === "object") {
+                    window.__EF_BATCH_WAVE_MEDALS__ = parsed;
+                    const latestVersion = parsed.latestVersion || Object.keys(parsed.byVersion)[0];
+                    if (latestVersion && parsed.byVersion[latestVersion]) {
+                        window.__EF_HERO_REBIRTH_MEDAL_TIER__ = parsed.byVersion[latestVersion];
+                    }
+                }
+            }
+        } catch (error) {
+            // Ignore restore errors.
+        }
+    }
+
+    const direct = window.__EF_HERO_REBIRTH_MEDAL_TIER__;
+    if (direct && typeof direct === "object") {
+        return direct;
+    }
+
+    const batch = window.__EF_BATCH_WAVE_MEDALS__;
+    if (batch && batch.byVersion && typeof batch.byVersion === "object") {
+        const latestVersion = batch.latestVersion;
+        if (latestVersion && batch.byVersion[latestVersion]) {
+            return batch.byVersion[latestVersion];
+        }
+
+        const versions = Object.keys(batch.byVersion);
+        for (let i = versions.length - 1; i >= 0; i -= 1) {
+            const candidate = batch.byVersion[versions[i]];
+            if (!candidate || typeof candidate !== "object") {
+                continue;
+            }
+            const hasMap = candidate.waveToMedal && typeof candidate.waveToMedal === "object"
+                && Object.keys(candidate.waveToMedal).length > 0;
+            const hasEntries = Array.isArray(candidate.entries) && candidate.entries.length > 0;
+            if (hasMap || hasEntries) {
+                return candidate;
+            }
+        }
+    }
+
+    return null;
+}
+
+function getMedalsAtCurrentWave(wave) {
+    if (!Number.isFinite(wave) || wave <= 0) {
+        return { wave: NaN, medal: NaN };
+    }
+
+    const store = getRebirthTierStore();
+    if (!store || typeof store !== "object") {
+        return { wave: NaN, medal: NaN };
+    }
+
+    const targetWave = Math.max(10, Math.floor(wave / 10) * 10);
+    const waveToMedal = store.waveToMedal && typeof store.waveToMedal === "object"
+        ? store.waveToMedal
+        : null;
+    if (waveToMedal) {
+        const directMedal = Number(waveToMedal[targetWave]);
+        if (Number.isFinite(directMedal)) {
+            return { wave: targetWave, medal: directMedal };
+        }
+    }
+
+    if (Array.isArray(store.entries)) {
+        const next = store.entries.find((entry) => Array.isArray(entry) && Number(entry[0]) >= targetWave);
+        if (next) {
+            const nextWave = Number(next[0]);
+            const nextMedal = Number(next[1]);
+            if (Number.isFinite(nextWave) && Number.isFinite(nextMedal)) {
+                return { wave: nextWave, medal: nextMedal };
+            }
+        }
+    }
+
+    return { wave: targetWave, medal: NaN };
+}
+
 export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null } = {}) {
     const overlay = createWaveOverlay();
     const metrics = createWaveMetrics();
@@ -42,7 +127,6 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
     let hardTimeoutId = null;
     let attached = true;
     let lastOverlayAt = 0;
-    let candidateCount = 0;
     let trackedWave = null;
     let hasWaveBaseline = false;
     let trackedWaveStartedAt = performance.now();
@@ -59,7 +143,6 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
     const startAt = performance.now();
     window.__EF_WAVE_TRACKER_STATE__ = {
         status: "scanning",
-        candidateCount: 0,
         hookedAtMs: null
     };
 
@@ -114,9 +197,6 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
     }
 
     function hookController(controller) {
-        candidateCount += 1;
-        window.__EF_WAVE_TRACKER_STATE__.candidateCount = candidateCount;
-
         if (!attached || !isValidController(controller)) {
             return;
         }
@@ -179,6 +259,7 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
                 })()
                 : NaN;
             const rebirthTimeSec = Math.max(0, (now - rebirthStartedAt) / 1000);
+            const medalsAtCurrentWave = getMedalsAtCurrentWave(wave);
 
             metrics.addSample(wave);
             if (now - lastOverlayAt >= 50) {
@@ -194,6 +275,7 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
                     waveP95Sec,
                     completedWaves,
                     skippedWaves,
+                    medalsAtCurrentWave,
                     wpm: wpmState.wpm,
                     wpmReady: wpmState.ready
                 });
@@ -203,7 +285,6 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
         };
 
         wrapped[WRAPPED_MARKER] = true;
-        wrapped.__efWaveOriginal = original;
         controller.checkProgress = wrapped;
 
         const initialWave = Number(controller.getCurrentWave());
@@ -213,6 +294,7 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
         rebirthStartedAt = trackedWaveStartedAt;
 
         const initialDisplayWave = Number.isFinite(initialWave) ? initialWave : profileWave;
+        const medalsAtCurrentWave = getMedalsAtCurrentWave(initialDisplayWave);
         metrics.addSample(initialDisplayWave);
         overlay.setBattle({
             wave: initialDisplayWave,
@@ -224,6 +306,7 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
             waveP95Sec: NaN,
             completedWaves: 0,
             skippedWaves: 0,
+            medalsAtCurrentWave,
             wpm: 0,
             wpmReady: false
         });

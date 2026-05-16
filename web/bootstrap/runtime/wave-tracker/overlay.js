@@ -45,6 +45,13 @@ function ensureStyle() {
   column-gap: 7px;
   row-gap: 6px;
 }
+#${OVERLAY_ID} .ef-wave-status {
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 2px;
+}
 #${OVERLAY_ID} .ef-wave-metric {
   display: grid;
   row-gap: 1px;
@@ -60,6 +67,20 @@ function ensureStyle() {
   font-size: 14px;
   letter-spacing: 0.2px;
   margin-bottom: 4px;
+  text-align: center;
+}
+#${OVERLAY_ID} .ef-wave-separator.medals {
+  margin-top: 4px;
+  margin-bottom: 0;
+}
+#${OVERLAY_ID} .ef-wave-medals-body {
+  display: grid;
+  grid-template-columns: 1fr;
+  row-gap: 6px;
+  margin-top: 6px;
+}
+#${OVERLAY_ID} .ef-wave-hidden {
+  display: none !important;
 }
 `;
     document.head.appendChild(style);
@@ -72,11 +93,30 @@ export function createWaveOverlay() {
     node.innerHTML = `
 <div class="ef-wave-title">Wave Tracker</div>
 <div class="ef-wave-separator"></div>
+<div class="ef-wave-status"></div>
 <div class="ef-wave-body"></div>
 <div class="ef-wave-separator bottom"></div>
 <div class="ef-wave-subtitle">Medals</div>
+<div class="ef-wave-separator medals"></div>
+<div class="ef-wave-medals-body"></div>
 `;
+    const topSeparator = node.querySelector(".ef-wave-separator");
+    const status = node.querySelector(".ef-wave-status");
     const body = node.querySelector(".ef-wave-body");
+    const bottomSeparator = node.querySelector(".ef-wave-separator.bottom");
+    const medalsSubtitle = node.querySelector(".ef-wave-subtitle");
+    const medalsSeparator = node.querySelector(".ef-wave-separator.medals");
+    const medalsBody = node.querySelector(".ef-wave-medals-body");
+
+    function setStatsVisible(visible) {
+        const className = "ef-wave-hidden";
+        for (const element of [topSeparator, body, bottomSeparator, medalsSubtitle, medalsSeparator, medalsBody]) {
+            if (!element) {
+                continue;
+            }
+            element.classList.toggle(className, !visible);
+        }
+    }
 
     function renderMetrics(metrics) {
         body.innerHTML = metrics.map(({ label, value }) => (
@@ -84,12 +124,32 @@ export function createWaveOverlay() {
         )).join("");
     }
 
-    renderMetrics([{ label: "Status", value: "scanning" }]);
+    function renderStatus(label, value) {
+        status.innerHTML = label
+            ? `<span class="ef-wave-label">${label}:</span><span class="ef-wave-value">${value}</span>`
+            : "";
+    }
+
+    function renderMedalsMetrics(metrics) {
+        medalsBody.innerHTML = metrics.map(({ label, value }) => (
+            `<div class="ef-wave-metric"><div class="ef-wave-label">${label}</div><div class="ef-wave-value">${value}</div></div>`
+        )).join("");
+    }
+
+    function setStatusVisible(visible) {
+        status.classList.toggle("ef-wave-hidden", !visible);
+    }
+
+    setStatsVisible(false);
+    setStatusVisible(true);
+    renderStatus("Status", "scanning");
     document.body.appendChild(node);
 
     return {
         setScanning() {
-            renderMetrics([{ label: "Status", value: "scanning" }]);
+            setStatsVisible(false);
+            setStatusVisible(true);
+            renderStatus("Status", "scanning");
         },
         setBattle({
             wave,
@@ -102,7 +162,8 @@ export function createWaveOverlay() {
             waveAvg100Sec,
             waveP95Sec,
             completedWaves,
-            skippedWaves
+            skippedWaves,
+            medalsAtCurrentWave
         }) {
             const safeWave = Number.isFinite(wave) ? Math.floor(wave) : "-";
             const safeMaxWave = Number.isFinite(maxWave) ? Math.floor(maxWave) : "syncing";
@@ -116,6 +177,10 @@ export function createWaveOverlay() {
             const safeWpm = wpmReady && Number.isFinite(wpm) ? wpm.toFixed(2) : "warming up";
             const safeCompletedWaves = Number.isFinite(completedWaves) ? Math.floor(completedWaves) : 0;
             const safeSkippedWaves = Number.isFinite(skippedWaves) ? Math.floor(skippedWaves) : 0;
+            const medalValue = Number.isFinite(medalsAtCurrentWave?.medal) ? Math.floor(medalsAtCurrentWave.medal) : "-";
+            const medalWave = Number.isFinite(medalsAtCurrentWave?.wave) ? Math.floor(medalsAtCurrentWave.wave) : "-";
+            setStatsVisible(true);
+            setStatusVisible(false);
             renderMetrics([
                 { label: "Wave", value: `${safeWave}` },
                 { label: "Max Wave", value: `${safeMaxWave}` },
@@ -128,9 +193,14 @@ export function createWaveOverlay() {
                 { label: "Completed Waves", value: `${safeCompletedWaves}` },
                 { label: "Skipped Waves", value: `${safeSkippedWaves}` }
             ]);
+            renderMedalsMetrics([
+                { label: "Medals at current Wave", value: `${medalValue} (W${medalWave})` }
+            ]);
         },
         setError(message) {
-            renderMetrics([{ label: "Status", value: message }]);
+            setStatsVisible(false);
+            setStatusVisible(true);
+            renderStatus("Status", message);
         },
         remove() {
             node.remove();
