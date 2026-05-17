@@ -13,6 +13,7 @@ function ensureStyle() {
   top: 8px;
   right: 8px;
   z-index: 2147483647;
+  box-sizing: border-box;
   min-width: 220px;
   padding: 9px 11px;
   border-radius: 8px;
@@ -24,12 +25,60 @@ function ensureStyle() {
   line-height: 1.25;
   pointer-events: none;
 }
+#${OVERLAY_ID}.ef-wave-minimized {
+  min-width: 0;
+  width: 38px;
+  height: 38px;
+  padding: 9px 11px;
+}
+#${OVERLAY_ID}.ef-wave-minimized > :not(.ef-wave-header) {
+  display: none !important;
+}
+#${OVERLAY_ID}.ef-wave-minimized .ef-wave-title {
+  display: none !important;
+}
+#${OVERLAY_ID}.ef-wave-minimized .ef-wave-header {
+  min-height: 18px;
+}
+#${OVERLAY_ID}.ef-wave-minimized .ef-wave-toggle {
+  top: -2px;
+  right: -4px;
+}
+#${OVERLAY_ID} .ef-wave-header {
+  position: relative;
+  min-height: 20px;
+}
 #${OVERLAY_ID} .ef-wave-title {
   font-weight: 700;
   font-size: 16px;
   letter-spacing: 0.3px;
-  margin-bottom: 6px;
+  margin: 0 24px 6px 0;
   text-align: center;
+}
+#${OVERLAY_ID} .ef-wave-toggle {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 224, 138, 0.45);
+  border-radius: 3px;
+  background: rgba(255, 224, 138, 0.12);
+  color: #ffe08a;
+  font: inherit;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  pointer-events: auto;
+  text-align: center;
+}
+#${OVERLAY_ID} .ef-wave-toggle:hover {
+  background: rgba(255, 224, 138, 0.22);
 }
 #${OVERLAY_ID} .ef-wave-separator {
   height: 1px;
@@ -154,7 +203,10 @@ export function createWaveOverlay() {
     const node = document.createElement("div");
     node.id = OVERLAY_ID;
     node.innerHTML = `
-<div class="ef-wave-title">Wave Tracker</div>
+<div class="ef-wave-header">
+  <div class="ef-wave-title">Wave Tracker</div>
+  <button class="ef-wave-toggle" type="button" aria-label="Minimize Wave Tracker" title="Minimize Wave Tracker">-</button>
+</div>
 <div class="ef-wave-separator"></div>
 <div class="ef-wave-status"></div>
 <div class="ef-wave-body"></div>
@@ -171,6 +223,7 @@ export function createWaveOverlay() {
     const topSeparator = node.querySelector(".ef-wave-separator");
     const status = node.querySelector(".ef-wave-status");
     const body = node.querySelector(".ef-wave-body");
+    const toggleButton = node.querySelector(".ef-wave-toggle");
     const bottomSeparator = node.querySelector(".ef-wave-separator.bottom");
     const medalsSubtitle = node.querySelector(".ef-wave-subtitle");
     const medalsSeparator = node.querySelector(".ef-wave-separator.medals");
@@ -179,6 +232,7 @@ export function createWaveOverlay() {
     const medalBuffInput = node.querySelector(".ef-wave-medal-buff-input");
     const medalBuffButton = node.querySelector(".ef-wave-medal-buff-button");
     let medalBuffPercent = readStoredMedalBuffPercent();
+    let minimized = false;
     if (medalBuffInput) {
         medalBuffInput.value = String(medalBuffPercent);
     }
@@ -190,6 +244,15 @@ export function createWaveOverlay() {
                 continue;
             }
             element.classList.toggle(className, !visible);
+        }
+    }
+
+    function syncMinimizedState() {
+        node.classList.toggle("ef-wave-minimized", minimized);
+        if (toggleButton) {
+            toggleButton.textContent = minimized ? "+" : "-";
+            toggleButton.setAttribute("aria-label", minimized ? "Expand Wave Tracker" : "Minimize Wave Tracker");
+            toggleButton.title = minimized ? "Expand Wave Tracker" : "Minimize Wave Tracker";
         }
     }
 
@@ -236,6 +299,13 @@ export function createWaveOverlay() {
         element?.addEventListener("pointerdown", (event) => event.stopPropagation());
         element?.addEventListener("keydown", (event) => event.stopPropagation());
     }
+    toggleButton?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        minimized = !minimized;
+        syncMinimizedState();
+    });
+    toggleButton?.addEventListener("pointerdown", (event) => event.stopPropagation());
+    toggleButton?.addEventListener("keydown", (event) => event.stopPropagation());
     medalBuffInput?.addEventListener("input", () => {
         medalBuffInput.value = medalBuffInput.value.replace(/\D/g, "");
     });
@@ -257,6 +327,7 @@ export function createWaveOverlay() {
             setStatsVisible(false);
             setStatusVisible(true);
             renderStatus("Status", "scanning");
+            syncMinimizedState();
         },
         setBattle({
             wave,
@@ -346,11 +417,13 @@ export function createWaveOverlay() {
                 { label: "Target ETA", value: eta },
                 { label: "Decision", value: recommendationValue, valueClass: recommendationClass }
             ]);
+            syncMinimizedState();
         },
         setError(message) {
             setStatsVisible(false);
             setStatusVisible(true);
             renderStatus("Status", message);
+            syncMinimizedState();
         },
         remove() {
             node.remove();
