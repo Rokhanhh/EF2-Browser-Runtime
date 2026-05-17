@@ -4,6 +4,7 @@ import { createWaveOverlay } from "./overlay.js";
 
 const WRAPPED_MARKER = "__efWaveCheckProgressWrapped";
 const MIN_VALID_WAVE_MS = 70;
+const MIN_SOUL_REST_RUN_SEC = 20 * 60;
 const ROLLING_SHORT_WAVE_WINDOW = 10;
 const ROLLING_WAVE_WINDOW = 100;
 const REBIRTH_TIER_STORAGE_KEY = "__EF_HERO_REBIRTH_MEDAL_TIER_CACHE__";
@@ -186,7 +187,7 @@ function createMedalMpmState({
         projectedMpm: NaN,
         targetWave: NaN,
         etaSec: NaN,
-        recommendation: "warming up"
+        recommendation: rebirthTimeSec < MIN_SOUL_REST_RUN_SEC ? "continue_to_20m" : "warming up"
     };
 
     if (!Number.isFinite(wave) || !Number.isFinite(currentMpm) || currentMpm <= 0) {
@@ -194,7 +195,7 @@ function createMedalMpmState({
     }
 
     if (!Number.isFinite(estimatedWaveTimeSec) || estimatedWaveTimeSec <= 0) {
-        state.recommendation = "need speed";
+        state.recommendation = rebirthTimeSec < MIN_SOUL_REST_RUN_SEC ? "continue_to_20m" : "need speed";
         return state;
     }
     const currentWaveElapsedSec = Number.isFinite(waveTimeSec) && waveTimeSec > 0 ? waveTimeSec : 0;
@@ -226,7 +227,9 @@ function createMedalMpmState({
     state.projectedMpm = bestProjectedMpm;
     state.targetWave = bestTargetWave;
     state.etaSec = bestEtaSec;
-    state.recommendation = bestProjectedMpm > currentMpm * 1.01 ? "continue" : "rebirth";
+    state.recommendation = rebirthTimeSec < MIN_SOUL_REST_RUN_SEC
+        ? "continue_to_20m"
+        : bestProjectedMpm > currentMpm * 1.01 ? "continue" : "rebirth";
     return state;
 }
 

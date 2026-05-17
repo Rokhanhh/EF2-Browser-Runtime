@@ -385,12 +385,14 @@ export function createWaveOverlay() {
                 ? new Date(Math.floor(medalMpmState.etaSec) * 1000).toISOString().slice(11, 19)
                 : "-";
             const recommendation = medalMpmState?.recommendation || "warming up";
-            const recommendationValue = recommendation === "continue"
-                ? "Continue"
-                : recommendation === "rebirth"
-                    ? "Rebirth"
-                    : recommendation;
-            const recommendationClass = recommendation === "continue"
+            const recommendationValue = recommendation === "continue_to_20m"
+                ? "Continue to 20m"
+                : recommendation === "continue"
+                    ? "Continue"
+                    : recommendation === "rebirth"
+                        ? "Rebirth"
+                        : recommendation;
+            const recommendationClass = recommendation === "continue_to_20m" || recommendation === "continue"
                 ? "ef-wave-decision-continue"
                 : recommendation === "rebirth"
                     ? "ef-wave-decision-rebirth"
