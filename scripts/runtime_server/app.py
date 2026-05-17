@@ -10,6 +10,7 @@ import time
 from . import state
 from .bundle import prepare_remote_bundle
 from .config import (
+    APP_BASE_PATH,
     HEARTBEAT_INTERVAL_SECONDS,
     LISTEN_PORT,
     RUNTIME_ROOT,
@@ -19,12 +20,20 @@ from .config import (
 from .handler import RuntimeHandler
 from .logging_utils import log_credits, log_server
 
-def start_server_heartbeat() -> None:
+
+def build_server_url(port: int) -> str:
+    app_path = APP_BASE_PATH if APP_BASE_PATH.startswith("/") else f"/{APP_BASE_PATH}"
+    if not app_path.endswith("/"):
+        app_path = f"{app_path}/"
+    return f"http://localhost:{port}{app_path}"
+
+
+def start_server_heartbeat(server_url: str) -> None:
     if not SHOW_HEARTBEAT_LOGS:
         return
 
     bundle_version = state.get_active_bundle_version()
-    log_server(f"Up | Bundle {bundle_version}")
+    log_server(f"Up | {server_url} | Bundle {bundle_version}")
 
     def heartbeat_loop() -> None:
         while True:
@@ -66,7 +75,7 @@ def main() -> None:
 
         log_server(f"Request logs: {'ON' if SHOW_REQUEST_LOGS else 'OFF'}")
         log_server("Press Ctrl+C to stop")
-        start_server_heartbeat()
+        start_server_heartbeat(build_server_url(args.port))
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
