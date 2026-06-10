@@ -169,8 +169,10 @@ function createMedalMpmState({
 }) {
     const currentMedal = Number(medalsAtCurrentWave?.medal);
     const calculateGameMpm = (medal, elapsedSec) => {
-        const elapsedMinutes = Math.floor(elapsedSec / 60);
-        return Number.isFinite(medal) && medal > 0 && elapsedMinutes > 0
+        const elapsedMinutes = Number.isFinite(elapsedSec)
+            ? Math.max(MIN_SOUL_REST_RUN_SEC / 60, Math.floor(elapsedSec / 60))
+            : NaN;
+        return Number.isFinite(medal) && medal > 0 && Number.isFinite(elapsedMinutes)
             ? medal / elapsedMinutes
             : NaN;
     };
