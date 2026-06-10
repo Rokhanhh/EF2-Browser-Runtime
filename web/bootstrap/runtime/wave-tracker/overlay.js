@@ -345,7 +345,9 @@ export function createWaveOverlay() {
             wpm,
             wpmReady,
             waveTimeSec,
-            waveAvgTimeSec,
+            waveSpan10TotalSec,
+            waveSpan10FromWave,
+            waveSpan10ToWave,
             waveAvg10Sec,
             waveAvg100Sec,
             completedWaves,
@@ -357,7 +359,20 @@ export function createWaveOverlay() {
             const safeMaxWave = Number.isFinite(maxWave) ? Math.floor(maxWave) : "syncing";
             const safeRebirthTime = formatMinSec(rebirthTimeSec);
             const safeWaveTime = Number.isFinite(waveTimeSec) ? waveTimeSec.toFixed(2) : "-";
-            const safeWaveAvg = Number.isFinite(waveAvgTimeSec) ? waveAvgTimeSec.toFixed(2) : "0.00";
+            const safeWaveSpan10Total = Number.isFinite(waveSpan10TotalSec) ? waveSpan10TotalSec.toFixed(2) : "-";
+            const waveSpan10From = Number.isFinite(waveSpan10FromWave)
+                ? Math.floor(waveSpan10FromWave)
+                : Number.isFinite(wave)
+                    ? Math.floor(wave / 10) * 10
+                    : NaN;
+            const waveSpan10To = Number.isFinite(waveSpan10ToWave)
+                ? Math.floor(waveSpan10ToWave)
+                : Number.isFinite(waveSpan10From)
+                    ? waveSpan10From + 10
+                    : NaN;
+            const waveSpan10Label = Number.isFinite(waveSpan10From) && Number.isFinite(waveSpan10To)
+                ? `Time Wave ${waveSpan10From}-${waveSpan10To}`
+                : "10 wave time";
             const safeWaveAvg10 = Number.isFinite(waveAvg10Sec) ? waveAvg10Sec.toFixed(2) : "0.00";
             const safeWaveAvg100 = Number.isFinite(waveAvg100Sec) ? waveAvg100Sec.toFixed(2) : "0.00";
             const safeWpm = wpmReady && Number.isFinite(wpm) ? wpm.toFixed(2) : "warming up";
@@ -412,7 +427,7 @@ export function createWaveOverlay() {
                 { label: "WPM", value: safeWpm },
                 { label: "Rebirth time", value: safeRebirthTime },
                 { label: "Wave time", value: `${safeWaveTime}s` },
-                { label: "Wave average time", value: `${safeWaveAvg}s` },
+                { label: waveSpan10Label, value: `${safeWaveSpan10Total}s` },
                 { label: "Wave average (10w)", value: `${safeWaveAvg10}s` },
                 { label: "Wave average (100w)", value: `${safeWaveAvg100}s` },
                 { label: "Completed Waves", value: `${safeCompletedWaves}` },

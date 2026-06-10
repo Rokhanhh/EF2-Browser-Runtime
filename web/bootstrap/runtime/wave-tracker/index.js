@@ -403,10 +403,11 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
                 : Math.max(0, (now - rebirthStartedAt) / 1000);
             const medalsAtCurrentWave = getMedalsAtCurrentWave(wave);
 
-            metrics.addSample(wave);
+            metrics.addSample(wave, now);
             if (now - lastOverlayAt >= 50) {
                 lastOverlayAt = now;
                 const wpmState = metrics.getWpmState(now);
+                const waveSpan10State = metrics.getWaveSpanTimeState(10, now);
                 const medalMpmState = createMedalMpmState({
                     wave,
                     maxWave,
@@ -424,7 +425,9 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
                     maxWave,
                     rebirthTimeSec,
                     waveTimeSec,
-                    waveAvgTimeSec,
+                    waveSpan10TotalSec: waveSpan10State.totalTimeSec,
+                    waveSpan10FromWave: waveSpan10State.fromWave,
+                    waveSpan10ToWave: waveSpan10State.toWave,
                     waveAvg10Sec,
                     waveAvg100Sec,
                     completedWaves,
@@ -471,7 +474,9 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
             maxWave,
             rebirthTimeSec: initialRebirthTimeSec,
             waveTimeSec: 0,
-            waveAvgTimeSec: 0,
+            waveSpan10TotalSec: NaN,
+            waveSpan10FromWave: NaN,
+            waveSpan10ToWave: NaN,
             waveAvg10Sec: NaN,
             waveAvg100Sec: NaN,
             completedWaves: 0,
