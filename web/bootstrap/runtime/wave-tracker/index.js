@@ -237,6 +237,12 @@ function createMedalMpmState({
     return state;
 }
 
+function getGameMpmMinute(rebirthTimeSec) {
+    return Number.isFinite(rebirthTimeSec)
+        ? Math.max(MIN_SOUL_REST_RUN_SEC / 60, Math.floor(rebirthTimeSec / 60))
+        : NaN;
+}
+
 export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null } = {}) {
     const overlay = createWaveOverlay();
     const metrics = createWaveMetrics();
@@ -261,6 +267,11 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
     let rebirthStartedAt = performance.now();
     let completedWaves = 0;
     let skippedWaves = 0;
+    let bestMpmState = {
+        mpm: NaN,
+        wave: NaN,
+        minute: NaN
+    };
 
     const startAt = performance.now();
     window.__EF_WAVE_TRACKER_STATE__ = {
@@ -288,6 +299,28 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
         rebirthStartedAt = now;
         completedWaves = 0;
         skippedWaves = 0;
+        bestMpmState = {
+            mpm: NaN,
+            wave: NaN,
+            minute: NaN
+        };
+    }
+
+    function updateBestMpmState(medalMpmState, medalsAtCurrentWave, wave, rebirthTimeSec) {
+        const currentMpm = Number(medalMpmState?.currentMpm);
+        if (!Number.isFinite(currentMpm) || currentMpm <= 0) {
+            return;
+        }
+
+        if (Number.isFinite(bestMpmState.mpm) && currentMpm <= bestMpmState.mpm) {
+            return;
+        }
+
+        bestMpmState = {
+            mpm: currentMpm,
+            wave: Number.isFinite(medalsAtCurrentWave?.wave) ? Math.floor(medalsAtCurrentWave.wave) : Math.floor(wave),
+            minute: getGameMpmMinute(rebirthTimeSec)
+        };
     }
 
     function updateProfileLastReviveTime(value) {
@@ -420,6 +453,7 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
                     wpm: wpmState.wpm,
                     wpmReady: wpmState.ready
                 });
+                updateBestMpmState(medalMpmState, medalsAtCurrentWave, wave, rebirthTimeSec);
                 overlay.setBattle({
                     wave,
                     maxWave,
@@ -434,6 +468,7 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
                     skippedWaves,
                     medalsAtCurrentWave,
                     medalMpmState,
+                    bestMpmState,
                     wpm: wpmState.wpm,
                     wpmReady: wpmState.ready
                 });
@@ -468,6 +503,7 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
             wpm: 0,
             wpmReady: false
         });
+        updateBestMpmState(initialMedalMpmState, medalsAtCurrentWave, initialDisplayWave, initialRebirthTimeSec);
         metrics.addSample(initialDisplayWave);
         overlay.setBattle({
             wave: initialDisplayWave,
@@ -483,6 +519,7 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
             skippedWaves: 0,
             medalsAtCurrentWave,
             medalMpmState: initialMedalMpmState,
+            bestMpmState,
             wpm: 0,
             wpmReady: false
         });

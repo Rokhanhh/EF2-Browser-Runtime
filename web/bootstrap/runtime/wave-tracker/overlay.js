@@ -353,7 +353,8 @@ export function createWaveOverlay() {
             completedWaves,
             skippedWaves,
             medalsAtCurrentWave,
-            medalMpmState
+            medalMpmState,
+            bestMpmState
         }) {
             const safeWave = Number.isFinite(wave) ? Math.floor(wave) : "-";
             const safeMaxWave = Number.isFinite(maxWave) ? Math.floor(maxWave) : "syncing";
@@ -384,6 +385,12 @@ export function createWaveOverlay() {
             const currentMpm = Number.isFinite(medalMpmState?.currentMpm)
                 ? formatNumber(medalMpmState.currentMpm * medalBuffMultiplier)
                 : "-";
+            const bestMpm = Number.isFinite(bestMpmState?.mpm)
+                ? formatNumber(bestMpmState.mpm * medalBuffMultiplier)
+                : "-";
+            const bestMpmDetails = Number.isFinite(bestMpmState?.wave) && Number.isFinite(bestMpmState?.minute)
+                ? ` (W${Math.floor(bestMpmState.wave)} at ${Math.floor(bestMpmState.minute)}m)`
+                : "";
             const projectedMpm = Number.isFinite(medalMpmState?.projectedMpm)
                 ? formatNumber(medalMpmState.projectedMpm * medalBuffMultiplier)
                 : "-";
@@ -436,6 +443,7 @@ export function createWaveOverlay() {
             renderMedalsMetrics([
                 { label: "Medals at current Wave", value: `${medalValue} (W${medalWave})` },
                 { label: "Current MPM", value: currentMpm },
+                { label: "Best MPM", value: `${bestMpm}${bestMpmDetails}` },
                 { label: "Projected MPM", value: `${projectedMpm} (W${targetWave})` },
                 { label: "Projected gain", value: projectedGainValue, valueClass: projectedGainClass },
                 { label: "Target ETA", value: eta },
