@@ -168,10 +168,13 @@ function createMedalMpmState({
     medalsAtCurrentWave
 }) {
     const currentMedal = Number(medalsAtCurrentWave?.medal);
-    const currentMinutes = rebirthTimeSec / 60;
-    const currentMpm = Number.isFinite(currentMedal) && currentMedal > 0 && currentMinutes > 0
-        ? currentMedal / currentMinutes
-        : NaN;
+    const calculateGameMpm = (medal, elapsedSec) => {
+        const elapsedMinutes = Math.floor(elapsedSec / 60);
+        return Number.isFinite(medal) && medal > 0 && elapsedMinutes > 0
+            ? medal / elapsedMinutes
+            : NaN;
+    };
+    const currentMpm = calculateGameMpm(currentMedal, rebirthTimeSec);
 
     let estimatedWaveTimeSec = NaN;
     const waveTimeCandidates = [waveAvg10Sec, waveAvg100Sec, waveAvgTimeSec]
@@ -212,11 +215,10 @@ function createMedalMpmState({
             continue;
         }
         const etaSec = effectiveCurrentWaveTimeSec + Math.max(0, targetWave - wave - 1) * estimatedWaveTimeSec;
-        const projectedMinutes = (rebirthTimeSec + etaSec) / 60;
-        if (projectedMinutes <= 0) {
+        const projectedMpm = calculateGameMpm(targetMedal, rebirthTimeSec + etaSec);
+        if (!Number.isFinite(projectedMpm) || projectedMpm <= 0) {
             continue;
         }
-        const projectedMpm = targetMedal / projectedMinutes;
         if (projectedMpm > bestProjectedMpm) {
             bestProjectedMpm = projectedMpm;
             bestTargetWave = targetWave;
