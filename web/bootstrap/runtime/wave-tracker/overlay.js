@@ -1,6 +1,15 @@
 const OVERLAY_ID = "ef-wave-overlay";
 const MEDAL_BUFF_STORAGE_KEY = "__EF_WAVE_TRACKER_MEDAL_BUFF_PERCENT__";
 
+function formatMinSec(totalSeconds) {
+    if (!Number.isFinite(totalSeconds)) {
+        return "00:00";
+    }
+    const seconds = Math.max(0, Math.floor(totalSeconds));
+    const minutes = Math.floor(seconds / 60);
+    return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 function ensureStyle() {
     if (document.getElementById(`${OVERLAY_ID}-style`)) {
         return;
@@ -346,9 +355,7 @@ export function createWaveOverlay() {
         }) {
             const safeWave = Number.isFinite(wave) ? Math.floor(wave) : "-";
             const safeMaxWave = Number.isFinite(maxWave) ? Math.floor(maxWave) : "syncing";
-            const safeRebirthTime = Number.isFinite(rebirthTimeSec)
-                ? new Date(Math.floor(rebirthTimeSec) * 1000).toISOString().slice(11, 19)
-                : "00:00:00";
+            const safeRebirthTime = formatMinSec(rebirthTimeSec);
             const safeWaveTime = Number.isFinite(waveTimeSec) ? waveTimeSec.toFixed(2) : "-";
             const safeWaveAvg = Number.isFinite(waveAvgTimeSec) ? waveAvgTimeSec.toFixed(2) : "0.00";
             const safeWaveAvg10 = Number.isFinite(waveAvg10Sec) ? waveAvg10Sec.toFixed(2) : "0.00";
@@ -382,7 +389,7 @@ export function createWaveOverlay() {
                 ? Math.floor(medalMpmState.targetWave)
                 : "-";
             const eta = Number.isFinite(medalMpmState?.etaSec)
-                ? new Date(Math.floor(medalMpmState.etaSec) * 1000).toISOString().slice(11, 19)
+                ? formatMinSec(medalMpmState.etaSec)
                 : "-";
             const recommendation = medalMpmState?.recommendation || "warming up";
             const recommendationValue = recommendation === "continue_to_20m"
