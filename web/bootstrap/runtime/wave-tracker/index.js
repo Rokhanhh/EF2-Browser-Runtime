@@ -5,6 +5,8 @@ import { createWaveOverlay } from "./overlay.js";
 const WRAPPED_MARKER = "__efWaveCheckProgressWrapped";
 const MIN_VALID_WAVE_MS = 70;
 const MIN_SOUL_REST_RUN_SEC = 20 * 60;
+const PROJECTED_GAIN_REQUIRED_RATIO = 1.01;
+const PROJECTION_WAVE_HORIZON = 500;
 const ROLLING_SHORT_WAVE_WINDOW = 10;
 const ROLLING_WAVE_WINDOW = 100;
 const REBIRTH_TIER_STORAGE_KEY = "__EF_HERO_REBIRTH_MEDAL_TIER_CACHE__";
@@ -160,12 +162,13 @@ function createMedalMpmState({
     maxWave,
     rebirthTimeSec,
     waveTimeSec,
+    blockEstimatedWaveTimeSec,
     waveAvg10Sec,
     waveAvg100Sec,
-    waveAvgTimeSec,
     wpm,
     wpmReady,
-    medalsAtCurrentWave
+    medalsAtCurrentWave,
+    bestMpm
 }) {
     const currentMedal = Number(medalsAtCurrentWave?.medal);
     const calculateGameMpm = (medal, elapsedSec) => {
@@ -179,12 +182,20 @@ function createMedalMpmState({
     const currentMpm = calculateGameMpm(currentMedal, rebirthTimeSec);
 
     let estimatedWaveTimeSec = NaN;
-    const waveTimeCandidates = [waveAvg10Sec, waveAvg100Sec, waveAvgTimeSec]
-        .filter((value) => Number.isFinite(value) && value > 0);
-    if (waveTimeCandidates.length > 0) {
-        estimatedWaveTimeSec = Math.max(...waveTimeCandidates);
+    if (Number.isFinite(blockEstimatedWaveTimeSec) && blockEstimatedWaveTimeSec > 0) {
+        estimatedWaveTimeSec = blockEstimatedWaveTimeSec;
     } else if (wpmReady && Number.isFinite(wpm) && wpm > 0) {
-        estimatedWaveTimeSec = 60 / wpm;
+        const waveTimeCandidates = [waveAvg10Sec, waveAvg100Sec, 60 / wpm]
+            .filter((value) => Number.isFinite(value) && value > 0);
+        if (waveTimeCandidates.length > 0) {
+            estimatedWaveTimeSec = Math.max(...waveTimeCandidates);
+        }
+    } else {
+        const waveTimeCandidates = [waveAvg10Sec, waveAvg100Sec]
+            .filter((value) => Number.isFinite(value) && value > 0);
+        if (waveTimeCandidates.length > 0) {
+            estimatedWaveTimeSec = Math.max(...waveTimeCandidates);
+        }
     }
 
     const state = {
@@ -206,7 +217,10 @@ function createMedalMpmState({
     const currentWaveElapsedSec = Number.isFinite(waveTimeSec) && waveTimeSec > 0 ? waveTimeSec : 0;
     const effectiveCurrentWaveTimeSec = Math.max(estimatedWaveTimeSec, currentWaveElapsedSec);
 
-    const projectionLimitWave = Number.isFinite(maxWave) && maxWave > wave ? maxWave : Infinity;
+    const localProjectionLimitWave = wave + PROJECTION_WAVE_HORIZON;
+    const projectionLimitWave = Number.isFinite(maxWave) && maxWave > wave
+        ? Math.min(maxWave, localProjectionLimitWave)
+        : localProjectionLimitWave;
     const entries = getRebirthMedalEntries();
     let bestProjectedMpm = currentMpm;
     let bestTargetWave = Number(medalsAtCurrentWave?.wave);
@@ -231,9 +245,12 @@ function createMedalMpmState({
     state.projectedMpm = bestProjectedMpm;
     state.targetWave = bestTargetWave;
     state.etaSec = bestEtaSec;
+    const decisionReferenceMpm = Number.isFinite(bestMpm)
+        ? Math.max(currentMpm, bestMpm)
+        : currentMpm;
     state.recommendation = rebirthTimeSec < MIN_SOUL_REST_RUN_SEC
         ? "continue_to_20m"
-        : bestProjectedMpm > currentMpm * 1.01 ? "continue" : "rebirth";
+        : bestProjectedMpm > decisionReferenceMpm * PROJECTED_GAIN_REQUIRED_RATIO ? "continue" : "rebirth";
     return state;
 }
 
@@ -260,8 +277,6 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
     let profileWave = NaN;
     let profileLastReviveTimeMs = NaN;
     let hasProfileLastReviveBaseline = false;
-    let validCompletedWaveCount = 0;
-    let validCompletedWaveTotalMs = 0;
     const recentValidWaveDurationsMs = [];
     let uninstallJsonObserver = null;
     let rebirthStartedAt = performance.now();
@@ -293,8 +308,6 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
         trackedWave = Number.isFinite(nextWave) ? nextWave : null;
         hasWaveBaseline = Number.isFinite(nextWave) && nextWave > 0;
         trackedWaveStartedAt = now;
-        validCompletedWaveCount = 0;
-        validCompletedWaveTotalMs = 0;
         recentValidWaveDurationsMs.length = 0;
         rebirthStartedAt = now;
         completedWaves = 0;
@@ -304,6 +317,23 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
             wave: NaN,
             minute: NaN
         };
+    }
+
+    function addEffectiveWaveDurationSamples(durationMs, deltaWave) {
+        if (!Number.isFinite(durationMs) || durationMs < MIN_VALID_WAVE_MS || !Number.isFinite(deltaWave) || deltaWave <= 0) {
+            return;
+        }
+
+        const advancedWaves = Math.max(1, Math.floor(deltaWave));
+        const waveDurationMs = durationMs / advancedWaves;
+        const samplesToAdd = Math.min(advancedWaves, ROLLING_WAVE_WINDOW);
+        for (let i = 0; i < samplesToAdd; i += 1) {
+            recentValidWaveDurationsMs.push(waveDurationMs);
+        }
+
+        while (recentValidWaveDurationsMs.length > ROLLING_WAVE_WINDOW) {
+            recentValidWaveDurationsMs.shift();
+        }
     }
 
     function updateBestMpmState(medalMpmState, medalsAtCurrentWave, wave, rebirthTimeSec) {
@@ -398,14 +428,7 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
                         skippedWaves += (deltaWave - 1);
                     }
                     const durationMs = Math.max(0, now - trackedWaveStartedAt);
-                    if (durationMs >= MIN_VALID_WAVE_MS) {
-                        validCompletedWaveCount += 1;
-                        validCompletedWaveTotalMs += durationMs;
-                        recentValidWaveDurationsMs.push(durationMs);
-                        if (recentValidWaveDurationsMs.length > ROLLING_WAVE_WINDOW) {
-                            recentValidWaveDurationsMs.shift();
-                        }
-                    }
+                    addEffectiveWaveDurationSamples(durationMs, deltaWave);
                 }
                 trackedWave = wave;
                 trackedWaveStartedAt = now;
@@ -415,9 +438,6 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
             }
 
             const waveTimeSec = Math.max(0, (now - trackedWaveStartedAt) / 1000);
-            const waveAvgTimeSec = validCompletedWaveCount > 0
-                ? (validCompletedWaveTotalMs / validCompletedWaveCount) / 1000
-                : NaN;
             const waveAvg10Sec = recentValidWaveDurationsMs.length > 0
                 ? (() => {
                     const values = recentValidWaveDurationsMs.slice(-ROLLING_SHORT_WAVE_WINDOW);
@@ -441,15 +461,17 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
                 lastOverlayAt = now;
                 const wpmState = metrics.getWpmState(now);
                 const waveSpan10State = metrics.getWaveSpanTimeState(10, now);
+                const waveBlockEstimateState = metrics.getWaveBlockEstimateState(10, now);
                 const medalMpmState = createMedalMpmState({
                     wave,
                     maxWave,
                     rebirthTimeSec,
                     waveTimeSec,
+                    blockEstimatedWaveTimeSec: waveBlockEstimateState.estimatedWaveTimeSec,
                     waveAvg10Sec,
                     waveAvg100Sec,
-                    waveAvgTimeSec,
                     medalsAtCurrentWave,
+                    bestMpm: bestMpmState.mpm,
                     wpm: wpmState.wpm,
                     wpmReady: wpmState.ready
                 });
@@ -496,10 +518,11 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
             maxWave,
             rebirthTimeSec: initialRebirthTimeSec,
             waveTimeSec: 0,
+            blockEstimatedWaveTimeSec: NaN,
             waveAvg100Sec: NaN,
             waveAvg10Sec: NaN,
-            waveAvgTimeSec: NaN,
             medalsAtCurrentWave,
+            bestMpm: bestMpmState.mpm,
             wpm: 0,
             wpmReady: false
         });

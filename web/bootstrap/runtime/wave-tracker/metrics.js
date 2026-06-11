@@ -2,6 +2,7 @@ export function createWaveMetrics(windowMs = 180000, minSpanMs = 15000, minDelta
     const waveChanges = [];
     const waveSamples = [];
     const waveBoundaries = [];
+    const waveBlocks = [];
     let lastWave = null;
 
     function trim(now) {
@@ -25,6 +26,20 @@ export function createWaveMetrics(windowMs = 180000, minSpanMs = 15000, minDelta
             return;
         }
         waveBoundaries.push({ wave, at });
+    }
+
+    function addBlock(fromWave, toWave, totalTimeSec, at) {
+        if (!Number.isFinite(fromWave) || !Number.isFinite(toWave) || !Number.isFinite(totalTimeSec) || totalTimeSec <= 0) {
+            return;
+        }
+        const lastBlock = waveBlocks[waveBlocks.length - 1];
+        if (lastBlock && lastBlock.fromWave === fromWave && lastBlock.toWave === toWave) {
+            return;
+        }
+        waveBlocks.push({ fromWave, toWave, totalTimeSec, at });
+        while (waveBlocks.length > 10) {
+            waveBlocks.shift();
+        }
     }
 
     function addCrossedBoundaries(fromWave, toWave, at, spanWaves) {
@@ -108,11 +123,13 @@ export function createWaveMetrics(windowMs = 180000, minSpanMs = 15000, minDelta
             if (deltaMs <= 0) {
                 continue;
             }
+            const totalTimeSec = deltaMs / 1000;
+            addBlock(previous.wave, last.wave, totalTimeSec, last.at);
 
             return {
                 ready: true,
                 waveTimeSec: (deltaMs / 1000) / deltaWave,
-                totalTimeSec: deltaMs / 1000,
+                totalTimeSec,
                 deltaWave,
                 fromWave: previous.wave,
                 toWave: last.wave
@@ -122,12 +139,54 @@ export function createWaveMetrics(windowMs = 180000, minSpanMs = 15000, minDelta
         return { ready: false, waveTimeSec: NaN, totalTimeSec: NaN, deltaWave: 0 };
     }
 
+    function averageBlockTime(blocks) {
+        if (!Array.isArray(blocks) || blocks.length === 0) {
+            return NaN;
+        }
+        return blocks.reduce((acc, block) => acc + block.totalTimeSec, 0) / blocks.length;
+    }
+
+    function getWaveBlockEstimateState(spanWaves = 10, now = performance.now()) {
+        getWaveSpanTimeState(spanWaves, now);
+
+        const validBlocks = waveBlocks
+            .filter((block) => block.toWave - block.fromWave === spanWaves)
+            .slice(-10);
+        if (validBlocks.length === 0) {
+            return {
+                ready: false,
+                estimatedWaveTimeSec: NaN,
+                lastBlockSec: NaN,
+                avg3BlockSec: NaN,
+                avg10BlockSec: NaN,
+                blockCount: 0
+            };
+        }
+
+        const lastBlock = validBlocks[validBlocks.length - 1];
+        const avg3BlockSec = averageBlockTime(validBlocks.slice(-3));
+        const avg10BlockSec = averageBlockTime(validBlocks);
+        const waveTimeCandidates = [lastBlock.totalTimeSec, avg3BlockSec, avg10BlockSec]
+            .map((value) => value / spanWaves)
+            .filter((value) => Number.isFinite(value) && value > 0);
+
+        return {
+            ready: waveTimeCandidates.length > 0,
+            estimatedWaveTimeSec: waveTimeCandidates.length > 0 ? Math.max(...waveTimeCandidates) : NaN,
+            lastBlockSec: lastBlock.totalTimeSec,
+            avg3BlockSec,
+            avg10BlockSec,
+            blockCount: validBlocks.length
+        };
+    }
+
     function reset() {
         waveChanges.length = 0;
         waveSamples.length = 0;
         waveBoundaries.length = 0;
+        waveBlocks.length = 0;
         lastWave = null;
     }
 
-    return { addSample, getWpmState, getWaveSpanTimeState, reset };
+    return { addSample, getWpmState, getWaveSpanTimeState, getWaveBlockEstimateState, reset };
 }

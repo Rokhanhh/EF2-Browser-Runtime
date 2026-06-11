@@ -394,10 +394,19 @@ export function createWaveOverlay() {
             const projectedMpm = Number.isFinite(medalMpmState?.projectedMpm)
                 ? formatNumber(medalMpmState.projectedMpm * medalBuffMultiplier)
                 : "-";
-            const projectedGain = Number.isFinite(medalMpmState?.currentMpm)
-                && medalMpmState.currentMpm > 0
+            const useBestMpmReference = Number.isFinite(bestMpmState?.mpm)
+                && Number.isFinite(medalMpmState?.currentMpm)
+                && bestMpmState.mpm > medalMpmState.currentMpm;
+            const projectedGainReferenceMpm = useBestMpmReference
+                ? bestMpmState.mpm
+                : medalMpmState?.currentMpm;
+            const projectedGainLabel = useBestMpmReference
+                ? "Projected gain vs best"
+                : "Projected gain";
+            const projectedGain = Number.isFinite(projectedGainReferenceMpm)
+                && projectedGainReferenceMpm > 0
                 && Number.isFinite(medalMpmState?.projectedMpm)
-                ? ((medalMpmState.projectedMpm / medalMpmState.currentMpm) - 1) * 100
+                ? ((medalMpmState.projectedMpm / projectedGainReferenceMpm) - 1) * 100
                 : NaN;
             const projectedGainValue = Number.isFinite(projectedGain)
                 ? `${projectedGain >= 0 ? "+" : ""}${projectedGain.toFixed(2)}%`
@@ -445,7 +454,7 @@ export function createWaveOverlay() {
                 { label: "Current MPM", value: currentMpm },
                 { label: "Best MPM", value: `${bestMpm}${bestMpmDetails}` },
                 { label: "Projected MPM", value: `${projectedMpm} (W${targetWave})` },
-                { label: "Projected gain", value: projectedGainValue, valueClass: projectedGainClass },
+                { label: projectedGainLabel, value: projectedGainValue, valueClass: projectedGainClass },
                 { label: "Target ETA", value: eta },
                 { label: "Decision", value: recommendationValue, valueClass: recommendationClass }
             ]);
