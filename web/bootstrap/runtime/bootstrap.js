@@ -1,6 +1,7 @@
 import { ensureBrowserGlobals } from "./globals.js";
 import { callGameStart, loadCssFile, loadManifest, loadModule } from "./loader.js";
 import { setLoaderState, setStatus, showError } from "./ui.js";
+import { attachAutoSkiller } from "./auto-skiller/index.js";
 import { attachWaveTracker } from "./wave-tracker/index.js";
 
 async function waitForSplashFirstPaint() {
@@ -47,6 +48,17 @@ async function bootstrapRuntime() {
             });
         } catch (error) {
             console.warn("[ef-runtime] wave tracker install failed:", error);
+        }
+    }
+
+    if (!window.__EF_AUTO_SKILLER_HANDLE__) {
+        try {
+            window.__EF_AUTO_SKILLER_HANDLE__ = attachAutoSkiller({
+                scanWarnMs: 15000,
+                scanHardTimeoutMs: null
+            });
+        } catch (error) {
+            console.warn("[ef-runtime] auto skiller install failed:", error);
         }
     }
 
