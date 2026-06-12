@@ -1,7 +1,9 @@
-export const REMOTE_ORIGIN = "https://game.endlessfrontier.io";
-export const REMOTE_WS_ORIGIN = window.__EF_REMOTE_WS_ORIGIN__ || "ws://game.endlessfrontier.io:5001";
-export const PROXY_PREFIX = "/__ef_proxy__";
-export const WS_PROXY_PREFIX = "/__ef_ws_proxy__";
+const runtimeConfig = window.__EF_RUNTIME_CONFIG__ || {};
+
+export const REMOTE_ORIGIN = runtimeConfig.remoteOrigin;
+export const REMOTE_WS_ORIGIN = runtimeConfig.remoteWsOrigin;
+export const PROXY_PREFIX = runtimeConfig.proxyPrefix;
+export const WS_PROXY_PREFIX = runtimeConfig.wsProxyPrefix;
 
 export const FIREBASE_DEFAULT_CONFIG = {
     apiKey: "AIzaSyC_ZDJUKRitUUZIwYK3LPe1qqZooG3kL6A",
@@ -14,4 +16,3 @@ export const FIREBASE_DEFAULT_CONFIG = {
 
 export const GOOGLE_WEB_CLIENT_ID =
     "911317121499-9fcd1j8k40dv4bciog53f4ofgbffughs.apps.googleusercontent.com";
-

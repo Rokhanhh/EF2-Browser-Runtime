@@ -33,17 +33,22 @@ UPSTREAM_POOL_LOCK = threading.Lock()
 UPSTREAM_POOL: dict[tuple[str, str, int], list[http.client.HTTPConnection]] = {}
 UPSTREAM_HTTPS_CONTEXT = ssl.create_default_context()
 FORCE_GB_INJECTION_MARKER = "__EF_FORCE_GB__"
+RUNTIME_CONFIG_SCRIPT_ID = "ef-runtime-config"
 WEBLOADER_SCRIPT_PATTERN = re.compile(
     r'<script\s+src=["\']\.\/(?:bootstrap\/)?webLoader\.js[^"\']*["\']>\s*</script>',
     re.IGNORECASE,
 )
+RUNTIME_CONFIG_SCRIPT = """
+<script id="ef-runtime-config">
+window.__EF_RUNTIME_CONFIG__ = __EF_RUNTIME_CONFIG_VALUE__;
+</script>
+""".strip()
 FORCE_GB_BOOTSTRAP_SCRIPT = """
 <script>
 (function forceGbRuntimeMode() {
     window.__EF_FORCE_GB__ = true;
     window.krMode = "n";
     window.CapacitorCustomPlatform = { name: "android" };
-    window.__EF_REMOTE_WS_ORIGIN__ = __EF_REMOTE_WS_ORIGIN_VALUE__;
 })();
 </script>
 """.strip()
@@ -63,6 +68,16 @@ def close_upstream_connection(connection: http.client.HTTPConnection) -> None:
         connection.close()
     except Exception:
         pass
+
+
+def build_browser_runtime_config() -> dict[str, str]:
+    return {
+        "remoteOrigin": REMOTE_BASE,
+        "remoteWsOrigin": REMOTE_WS_ORIGIN,
+        "proxyPrefix": PROXY_PREFIX,
+        "wsProxyPrefix": WS_PROXY_PREFIX,
+        "appBasePath": APP_BASE_PATH,
+    }
 
 
 def build_upstream_connection(scheme: str, host: str, port: int) -> http.client.HTTPConnection:
@@ -247,8 +262,7 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             return False
 
         html = index_path.read_text(encoding="utf-8")
-        html = html.replace('"__EF_REMOTE_WS_ORIGIN__"', json.dumps(REMOTE_WS_ORIGIN))
-        html = html.replace("'__EF_REMOTE_WS_ORIGIN__'", json.dumps(REMOTE_WS_ORIGIN))
+        html = self._inject_runtime_config_script(html)
         html = self._inject_force_gb_script(html)
         payload = html.encode("utf-8")
 
@@ -266,13 +280,26 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             self.close_connection = True
             return True
 
+    def _inject_runtime_config_script(self, html: str) -> str:
+        if f'id="{RUNTIME_CONFIG_SCRIPT_ID}"' in html:
+            return html
+
+        script_tag = RUNTIME_CONFIG_SCRIPT.replace(
+            "__EF_RUNTIME_CONFIG_VALUE__",
+            json.dumps(build_browser_runtime_config()),
+        ) + "\n"
+
+        head_index = html.lower().find("<head>")
+        if head_index != -1:
+            insert_at = head_index + len("<head>")
+            return html[:insert_at] + "\n" + script_tag + html[insert_at:]
+        return script_tag + html
+
     def _inject_force_gb_script(self, html: str) -> str:
         if FORCE_GB_INJECTION_MARKER in html:
             return html
 
-        script_tag = FORCE_GB_BOOTSTRAP_SCRIPT.replace(
-            "__EF_REMOTE_WS_ORIGIN_VALUE__", json.dumps(REMOTE_WS_ORIGIN)
-        ) + "\n"
+        script_tag = FORCE_GB_BOOTSTRAP_SCRIPT + "\n"
         match = WEBLOADER_SCRIPT_PATTERN.search(html)
         if match:
             return html[: match.start()] + script_tag + html[match.start() :]
@@ -448,7 +475,15 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         port = upstream.port or (443 if upstream.scheme == "wss" else 80)
-        use_tls = upstream.scheme == "wss" or port == 443 or port == 5001
+        configured_ws_origin = urllib.parse.urlsplit(REMOTE_WS_ORIGIN)
+        use_tls = (
+            upstream.scheme == "wss"
+            or port == 443
+            or (
+                upstream.hostname == configured_ws_origin.hostname
+                and port == configured_ws_origin.port
+            )
+        )
         upstream_path = urllib.parse.urlunsplit(("", "", upstream.path or "/", upstream.query, ""))
         remote_base = urllib.parse.urlsplit(REMOTE_BASE)
         remote_origin = urllib.parse.urlunsplit((remote_base.scheme, upstream.hostname, "", "", ""))

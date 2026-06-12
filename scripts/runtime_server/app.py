@@ -13,10 +13,8 @@ from . import state
 from .bundle import prepare_remote_bundle
 from .config import (
     APP_BASE_PATH,
-    HEARTBEAT_INTERVAL_SECONDS,
     LISTEN_PORT,
     RUNTIME_ROOT,
-    SHOW_HEARTBEAT_LOGS,
 )
 from .handler import RuntimeHandler
 from .logging_utils import log_credits, log_server, log_server_status
@@ -24,6 +22,7 @@ from .logging_utils import log_credits, log_server, log_server_status
 
 STOP_HOTKEY_TEXT = "Ctrl+Q"
 STOP_HOTKEY_CHAR = "\x11"
+HEARTBEAT_INTERVAL_SECONDS = 1
 
 
 def format_duration(total_seconds: int) -> str:
@@ -51,9 +50,6 @@ def log_runtime_ready(server_url: str) -> None:
 
 
 def start_server_heartbeat(started_at: float, stop_event: threading.Event) -> None:
-    if not SHOW_HEARTBEAT_LOGS:
-        return
-
     interval = max(1, HEARTBEAT_INTERVAL_SECONDS)
 
     def heartbeat_loop() -> None:

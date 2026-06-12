@@ -4,7 +4,15 @@ import urllib.parse
 from pathlib import Path
 
 from . import state
-from .config import APP_BASE_PATH, BUNDLE_STATIC_FILES, BUNDLE_STATIC_PREFIXES, WEB_ROOT
+from .config import APP_BASE_PATH, WEB_ROOT
+
+BUNDLE_STATIC_PREFIXES = ("assets/", "icons/", "transcoders/")
+BUNDLE_STATIC_FILES = {
+    "favicon.ico",
+    "game-manifest.json",
+    "manifest.json",
+    "sw.js",
+}
 
 GB_TITLE_FALLBACKS = {
     "assets/images/titleGb.jpg": "assets/images/title1504Gb.jpg",
