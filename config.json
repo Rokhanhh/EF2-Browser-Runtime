@@ -20,6 +20,6 @@
     "showRequestLogs": false,
     "showAssetRequestLogs": false,
     "showHeartbeatLogs": true,
-    "heartbeatIntervalSeconds": 60
+    "heartbeatIntervalSeconds": 1
   }
 }

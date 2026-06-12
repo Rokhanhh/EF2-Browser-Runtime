@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import sys
+import threading
 from datetime import datetime
 
 
@@ -37,7 +40,37 @@ def enable_windows_virtual_terminal() -> bool:
         return False
 
 
+def configure_windows_console_input() -> bool:
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-10)
+        if handle == 0 or handle == -1:
+            return False
+        mode = ctypes.c_uint()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) == 0:
+            return False
+
+        enable_processed_input = 0x0001
+        enable_quick_edit = 0x0040
+        enable_extended_flags = 0x0080
+        new_mode = (mode.value | enable_extended_flags) & ~enable_quick_edit & ~enable_processed_input
+        if kernel32.SetConsoleMode(handle, new_mode) == 0:
+            return False
+        return True
+    except Exception:
+        return False
+
+
 USE_COLORS = enable_windows_virtual_terminal() and sys.stdout.isatty()
+CONSOLE_INPUT_CONFIGURED = configure_windows_console_input()
+ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
+_OUTPUT_LOCK = threading.Lock()
+_STATUS_LINE_ACTIVE = False
+_STATUS_LINE_WIDTH = 0
 
 
 def color_text(text: str, *codes: str) -> str:
@@ -53,20 +86,64 @@ def build_log_prefix(channel: str, color: str) -> str:
     return f"{ts_text} {label}"
 
 
+def _visible_width(text: str) -> int:
+    return len(ANSI_PATTERN.sub("", text))
+
+
+def _clear_status_line() -> None:
+    global _STATUS_LINE_ACTIVE
+    global _STATUS_LINE_WIDTH
+
+    if not _STATUS_LINE_ACTIVE:
+        return
+    sys.stdout.write("\r" + (" " * _STATUS_LINE_WIDTH) + "\r")
+    _STATUS_LINE_ACTIVE = False
+    _STATUS_LINE_WIDTH = 0
+
+
+def _write_log_line(line: str) -> None:
+    with _OUTPUT_LOCK:
+        _clear_status_line()
+        print(line, flush=True)
+
+
+def _write_status_line(line: str) -> None:
+    global _STATUS_LINE_ACTIVE
+    global _STATUS_LINE_WIDTH
+
+    with _OUTPUT_LOCK:
+        terminal_width = shutil.get_terminal_size((120, 20)).columns
+        max_width = max(20, terminal_width - 1)
+        visible_width = _visible_width(line)
+        if visible_width > max_width:
+            line = ANSI_PATTERN.sub("", line)[: max_width - 3] + "..."
+            visible_width = _visible_width(line)
+
+        padding = max(0, _STATUS_LINE_WIDTH - visible_width)
+        sys.stdout.write(f"\r{line}{' ' * padding}")
+        sys.stdout.flush()
+        _STATUS_LINE_ACTIVE = True
+        _STATUS_LINE_WIDTH = visible_width
+
+
 def log_server(message: str) -> None:
-    print(f"{build_log_prefix('SERVER', ANSI_CYAN)} {message}")
+    _write_log_line(f"{build_log_prefix('SERVER', ANSI_CYAN)} {message}")
+
+
+def log_server_status(message: str) -> None:
+    _write_status_line(f"{build_log_prefix('SERVER', ANSI_CYAN)} {message}")
 
 
 def log_credits(message: str) -> None:
-    print(f"{build_log_prefix('CREDITS', ANSI_MAGENTA)} {message}")
+    _write_log_line(f"{build_log_prefix('CREDITS', ANSI_MAGENTA)} {message}")
 
 
 def log_bundle(message: str) -> None:
-    print(f"{build_log_prefix('BUNDLE', ANSI_YELLOW)} {message}")
+    _write_log_line(f"{build_log_prefix('BUNDLE', ANSI_YELLOW)} {message}")
 
 
 def log_error(channel: str, message: str) -> None:
-    print(f"{build_log_prefix(channel, ANSI_RED)} {message}")
+    _write_log_line(f"{build_log_prefix(channel, ANSI_RED)} {message}")
 
 
 def log_http(message: str, status_code: int | None = None) -> None:
@@ -78,4 +155,4 @@ def log_http(message: str, status_code: int | None = None) -> None:
             color = ANSI_ORANGE
         elif status_code >= 200:
             color = ANSI_GREEN
-    print(f"{build_log_prefix('HTTP', color)} {message}")
+    _write_log_line(f"{build_log_prefix('HTTP', color)} {message}")

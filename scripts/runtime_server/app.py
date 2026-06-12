@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import os
+import signal
 import socket
 import socketserver
 import threading
@@ -15,10 +17,23 @@ from .config import (
     LISTEN_PORT,
     RUNTIME_ROOT,
     SHOW_HEARTBEAT_LOGS,
-    SHOW_REQUEST_LOGS,
 )
 from .handler import RuntimeHandler
-from .logging_utils import log_credits, log_server
+from .logging_utils import log_credits, log_server, log_server_status
+
+
+STOP_HOTKEY_TEXT = "Ctrl+Q"
+STOP_HOTKEY_CHAR = "\x11"
+
+
+def format_duration(total_seconds: int) -> str:
+    hours, remainder = divmod(max(0, total_seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {seconds:02d}s"
+    if minutes:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
 
 
 def build_server_url(port: int) -> str:
@@ -28,23 +43,55 @@ def build_server_url(port: int) -> str:
     return f"http://localhost:{port}{app_path}"
 
 
-def start_server_heartbeat(server_url: str) -> None:
+def log_runtime_ready(server_url: str) -> None:
+    bundle_version = state.get_active_bundle_version()
+    log_server(f"Ready: {server_url}")
+    log_server(f"Bundle: {bundle_version}")
+    log_server(f"Press {STOP_HOTKEY_TEXT} to stop and close")
+
+
+def start_server_heartbeat(started_at: float, stop_event: threading.Event) -> None:
     if not SHOW_HEARTBEAT_LOGS:
         return
 
-    bundle_version = state.get_active_bundle_version()
-    log_server(f"Up | {server_url} | Bundle {bundle_version}")
+    interval = max(1, HEARTBEAT_INTERVAL_SECONDS)
 
     def heartbeat_loop() -> None:
-        while True:
-            time.sleep(HEARTBEAT_INTERVAL_SECONDS)
-            log_server("Alive")
+        while not stop_event.wait(interval):
+            uptime = format_duration(int(time.monotonic() - started_at))
+            bundle_version = state.get_active_bundle_version()
+            log_server_status(f"Running | Uptime {uptime} | Bundle {bundle_version}")
 
     thread = threading.Thread(target=heartbeat_loop, name="server-heartbeat", daemon=True)
     thread.start()
 
 
+def start_stop_hotkey_listener(stop_callback) -> None:
+    if os.name != "nt":
+        return
+
+    try:
+        import msvcrt
+    except ImportError:
+        return
+
+    def hotkey_loop() -> None:
+        while True:
+            if msvcrt.kbhit():
+                key = msvcrt.getwch()
+                if key == STOP_HOTKEY_CHAR:
+                    stop_callback()
+                    return
+            time.sleep(0.05)
+
+    thread = threading.Thread(target=hotkey_loop, name="runtime-stop-hotkey", daemon=True)
+    thread.start()
+
+
 def main() -> None:
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    started_at = time.monotonic()
+    stop_event = threading.Event()
     parser = argparse.ArgumentParser(description="Serve a minimal browser bootstrap for Endless Frontier 2.")
     parser.add_argument("port", nargs="?", type=int, default=LISTEN_PORT)
     args = parser.parse_args()
@@ -73,22 +120,39 @@ def main() -> None:
             except OSError as error:
                 log_server(f"IPv6 loopback disabled ({error})")
 
-        log_server(f"Request logs: {'ON' if SHOW_REQUEST_LOGS else 'OFF'}")
-        log_server("Press Ctrl+C to stop")
-        start_server_heartbeat(build_server_url(args.port))
-        try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
+        server_url = build_server_url(args.port)
+        log_runtime_ready(server_url)
+        start_server_heartbeat(started_at, stop_event)
+
+        def request_stop() -> None:
+            if stop_event.is_set():
+                return
+            stop_event.set()
             log_server("Stopping runtime...")
-        finally:
-            if ipv6_httpd:
-                try:
-                    ipv6_httpd.shutdown()
-                except Exception:
-                    pass
             try:
                 httpd.shutdown()
             except Exception:
                 pass
+
+        start_stop_hotkey_listener(request_stop)
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            request_stop()
+        finally:
+            stop_event.set()
+            if ipv6_httpd:
+                try:
+                    ipv6_httpd.shutdown()
+                except (Exception, KeyboardInterrupt):
+                    pass
+            try:
+                httpd.shutdown()
+            except (Exception, KeyboardInterrupt):
+                pass
             if ipv6_thread and ipv6_thread.is_alive():
-                ipv6_thread.join(timeout=1)
+                try:
+                    ipv6_thread.join(timeout=1)
+                except KeyboardInterrupt:
+                    pass
