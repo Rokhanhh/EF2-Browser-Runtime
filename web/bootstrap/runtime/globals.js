@@ -42,6 +42,18 @@ function installFpsOverlay() {
     window.requestAnimationFrame(update);
 }
 
+function disableContextMenu() {
+    if (window.__efContextMenuDisabled) {
+        return;
+    }
+    window.__efContextMenuDisabled = true;
+
+    window.addEventListener("contextmenu", event => {
+        event.preventDefault();
+        event.stopPropagation();
+    }, { capture: true });
+}
+
 export function ensureBrowserGlobals(version) {
     if (typeof window.__EF_FORCE_GB__ === "undefined") {
         window.__EF_FORCE_GB__ = true;
@@ -70,6 +82,7 @@ export function ensureBrowserGlobals(version) {
         Plugins: {},
     };
     window.cordova = window.cordova || {};
+    disableContextMenu();
     installFpsOverlay();
 
     installNetworkProxy();
