@@ -1,5 +1,9 @@
 {
   "listenPort": 8080,
+  "features": {
+    "showWaveTracker": true,
+    "showAutoSkiller": true
+  },
   "logging": {
     "showRequestLogs": false,
     "showAssetRequestLogs": false

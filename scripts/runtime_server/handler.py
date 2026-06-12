@@ -16,10 +16,10 @@ from .config import (
     PROXY_PREFIX,
     REMOTE_BASE,
     REMOTE_WS_ORIGIN,
-    SHOW_ASSET_REQUEST_LOGS,
-    SHOW_REQUEST_LOGS,
     WS_PROXY_PREFIX,
     WEB_ROOT,
+    get_feature_flags,
+    get_logging_flags,
 )
 from .bundle import prepare_remote_bundle
 from .logging_utils import log_error, log_http
@@ -77,6 +77,7 @@ def build_browser_runtime_config() -> dict[str, str]:
         "proxyPrefix": PROXY_PREFIX,
         "wsProxyPrefix": WS_PROXY_PREFIX,
         "appBasePath": APP_BASE_PATH,
+        **get_feature_flags(),
     }
 
 
@@ -133,23 +134,31 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
     def _set_runtime_cache_headers(self) -> None:
         request_path = urllib.parse.urlsplit(getattr(self, "path", "")).path
         normalized_path = normalize_app_path(request_path)
-        if normalized_path in {"/game-manifest.json", "/assets/index.js", "/assets/index.css"}:
+        if (
+            normalized_path in {"/", "/index.html", "/game-manifest.json", "/assets/index.js", "/assets/index.css"}
+            or normalized_path.startswith("/bootstrap/")
+        ):
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
             self.send_header("Pragma", "no-cache")
             self.send_header("Expires", "0")
 
     def log_message(self, format: str, *args) -> None:
-        if not SHOW_REQUEST_LOGS:
+        if not get_logging_flags()["showRequestLogs"]:
             return
         super().log_message(format, *args)
 
     def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
-        if not SHOW_REQUEST_LOGS:
+        logging_flags = get_logging_flags()
+        if not logging_flags["showRequestLogs"]:
             return
 
         path = getattr(self, "path", "-")
         normalized_path = normalize_app_path(path) if isinstance(path, str) else path
-        if not SHOW_ASSET_REQUEST_LOGS and isinstance(normalized_path, str) and normalized_path.startswith("/assets/"):
+        if (
+            not logging_flags["showAssetRequestLogs"]
+            and isinstance(normalized_path, str)
+            and normalized_path.startswith("/assets/")
+        ):
             return
 
         try:
@@ -163,7 +172,7 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         log_http(f"{code_text} {method} {path}{size_text}", status_code)
 
     def log_error(self, format: str, *args) -> None:
-        if not SHOW_REQUEST_LOGS:
+        if not get_logging_flags()["showRequestLogs"]:
             return
 
         # Avoid duplicate noisy lines for common send_error() paths like 404.
