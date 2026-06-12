@@ -1,9 +1,12 @@
 import { installObjectPropertyCandidateDetector } from "../property-detector.js";
+import { installWaveCandidateDetector } from "../wave-tracker/detector.js";
 import { createAutoSkillerOverlay } from "./overlay.js";
 
 const ACTIVE_SKILL_FPS = 60;
-const RENDER_INTERVAL_MS = 1000;
+const RENDER_INTERVAL_MS = 100;
 const AUTO_SKILL_SCAN_INTERVAL_MS = 50;
+const AUTO_SKILL_MODE_PUSH = "push";
+const AUTO_SKILL_MODE_SPEED = "speed";
 const AUTO_SKILL_BASE_DELAY_MIN_MS = 100;
 const AUTO_SKILL_BASE_DELAY_MAX_MS = 200;
 const AUTO_SKILL_BOOST_DELAY_MIN_MS = 300;
@@ -11,13 +14,20 @@ const AUTO_SKILL_BOOST_DELAY_MAX_MS = 500;
 const AUTO_SKILL_BOOST_WINDOW_MS = 5 * 60 * 1000;
 const AUTO_SKILL_BOOST_TARGET_COUNT = 7;
 const AUTO_SKILL_RETRY_MS = 1000;
+const AUTO_SKILL_ACTION_GAP_MS = 250;
+const SPEED_SKILL_DELAY_MS = 120;
+const SPEED_SKILL_TRIGGER_DEFAULT_PERCENT = 75;
+const WAVE_CALL_DISPLAY_NAME = "Rage Gauge";
+const AUTO_SKILLER_SETTINGS_KEY = "__EF_AUTO_SKILLER_SETTINGS__";
+const WAVE_CONTROLLER_WRAPPED_MARKER = "__efAutoSkillerWaveCheckProgressWrapped";
+const WAVE_PROGRESS_WRAPPED_MARKER = "__efAutoSkillerWaveProgressWrapped";
 const ACTIVE_SKILL_METADATA = {
-    1: { name: "Judgment Lightning" },
-    2: { name: "Heaven and Earth Explosion" },
+    1: { name: "Lightning" },
+    2: { name: "Heaven" },
     3: { name: "Skyblade" },
     4: { name: "Holy Prayer" },
-    5: { name: "Wings of Salvation" },
-    6: { name: "Musketeer Summon" }
+    5: { name: "Wings" },
+    6: { name: "Musketeer" }
 };
 const ACTIVE_SKILL_ID_MIN = 1;
 const ACTIVE_SKILL_ID_MAX = 6;
@@ -25,6 +35,40 @@ const ACTIVE_SKILL_ID_MAX = 6;
 function sanitizeNumber(value) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function normalizeStoredPercent(value, fallback = SPEED_SKILL_TRIGGER_DEFAULT_PERCENT) {
+    const parsed = Math.floor(sanitizeNumber(value));
+    return Number.isFinite(parsed) ? Math.max(1, Math.min(100, parsed)) : fallback;
+}
+
+function normalizeStoredWaveEndDigit(value, fallback = 0) {
+    const parsed = Math.floor(sanitizeNumber(value));
+    return Number.isFinite(parsed) && parsed >= 0 && parsed <= 9 ? parsed : fallback;
+}
+
+function readStoredSettings() {
+    try {
+        const raw = window.localStorage.getItem(AUTO_SKILLER_SETTINGS_KEY);
+        if (!raw) {
+            return {};
+        }
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (error) {
+        return {};
+    }
+}
+
+function writeStoredSettings(settings) {
+    try {
+        window.localStorage.setItem(AUTO_SKILLER_SETTINGS_KEY, JSON.stringify({
+            version: 1,
+            ...settings
+        }));
+    } catch (error) {
+        // Storage is optional.
+    }
 }
 
 function normalizeSkillId(value) {
@@ -69,6 +113,169 @@ function installActiveSkillButtonObserver(onCandidate) {
             // Keep the game runtime stable if our observer misreads a candidate.
         }
     });
+}
+
+function isWaveCallInfo(candidate) {
+    return candidate
+        && typeof candidate === "object"
+        && typeof candidate.callWave === "function"
+        && Number.isFinite(sanitizeNumber(candidate.maxEnergy))
+        && Number.isFinite(sanitizeNumber(candidate.maxCall))
+        && Number.isFinite(sanitizeNumber(candidate.pendingCalls));
+}
+
+function installWaveCallInfoObserver(onCandidate) {
+    return installObjectPropertyCandidateDetector(["pendingCalls", "maxEnergy", "lastCallTime"], (candidate) => {
+        if (!isWaveCallInfo(candidate)) {
+            return;
+        }
+        try {
+            onCandidate(candidate);
+        } catch (error) {
+            // Keep the game runtime stable if our observer misreads a candidate.
+        }
+    });
+}
+
+function isBattleManager(candidate) {
+    return candidate
+        && typeof candidate === "object"
+        && typeof candidate.getCurrentBattleType === "function"
+        && typeof candidate.getBattleState === "function"
+        && typeof candidate.isIdleBattleActive === "function";
+}
+
+function installBattleManagerObserver(onCandidate) {
+    return installObjectPropertyCandidateDetector(["currentBattle", "idleBattle", "battleState"], (candidate) => {
+        if (!isBattleManager(candidate)) {
+            return;
+        }
+        try {
+            onCandidate(candidate);
+        } catch (error) {
+            // Battle manager detection should not affect the game runtime.
+        }
+    });
+}
+
+function isWaveController(candidate) {
+    if (!candidate || typeof candidate !== "object") {
+        return false;
+    }
+    return typeof candidate.getCurrentWave === "function"
+        && typeof candidate.getWaveTime === "function"
+        && typeof candidate.checkProgress === "function";
+}
+
+function installWaveStartObserver(onWaveStart) {
+    let detachHook = null;
+    const stopDetector = installWaveCandidateDetector((controller) => {
+        if (!isWaveController(controller)) {
+            return;
+        }
+
+        const original = controller.checkProgress;
+        if (typeof original !== "function" || original[WAVE_CONTROLLER_WRAPPED_MARKER]) {
+            return;
+        }
+
+        let lastWave = Number(controller.getCurrentWave());
+        const wrapped = function wrappedAutoSkillerCheckProgress(...args) {
+            const result = original.apply(this, args);
+            const wave = Number(this.getCurrentWave());
+            if (Number.isFinite(wave) && Number.isFinite(lastWave) && wave !== lastWave) {
+                const previousWave = lastWave;
+                lastWave = wave;
+                try {
+                    onWaveStart({ wave, previousWave, deltaWave: wave - previousWave });
+                } catch (error) {
+                    // Speed mode should never affect the battle loop.
+                }
+            } else if (Number.isFinite(wave)) {
+                lastWave = wave;
+            }
+            return result;
+        };
+
+        wrapped[WAVE_CONTROLLER_WRAPPED_MARKER] = true;
+        controller.checkProgress = wrapped;
+        detachHook = () => {
+            if (controller.checkProgress === wrapped) {
+                controller.checkProgress = original;
+            }
+        };
+    });
+
+    return () => {
+        if (typeof detachHook === "function") {
+            detachHook();
+            detachHook = null;
+        }
+        stopDetector();
+    };
+}
+
+function parseWaveFromLabel(value) {
+    const match = String(value || "").match(/Wave\s+([0-9]+)/i);
+    return match ? Math.floor(sanitizeNumber(match[1])) : NaN;
+}
+
+function isWaveProgressOwner(candidate) {
+    return candidate
+        && typeof candidate === "object"
+        && candidate.waveBar
+        && typeof candidate.waveBar.updateBar === "function"
+        && typeof candidate.updateBar === "function";
+}
+
+function installWaveProgressObserver(onProgress) {
+    let detachHook = null;
+    const stopDetector = installObjectPropertyCandidateDetector(["waveBar"], (candidate) => {
+        if (!isWaveProgressOwner(candidate)) {
+            return;
+        }
+
+        const original = candidate.updateBar;
+        if (typeof original !== "function" || original[WAVE_PROGRESS_WRAPPED_MARKER]) {
+            return;
+        }
+
+        const wrapped = function wrappedAutoSkillerWaveProgress(current, total, ...rest) {
+            const result = original.call(this, current, total, ...rest);
+            const currentValue = sanitizeNumber(current);
+            const totalValue = sanitizeNumber(total);
+            const percent = Number.isFinite(currentValue) && Number.isFinite(totalValue) && totalValue > 0
+                ? Math.max(0, Math.min(100, (Math.min(currentValue, totalValue) / totalValue) * 100))
+                : NaN;
+            try {
+                onProgress({
+                    wave: parseWaveFromLabel(this?.lblDay?.text),
+                    current: currentValue,
+                    total: totalValue,
+                    percent
+                });
+            } catch (error) {
+                // Progress hooks must not affect the top menu render.
+            }
+            return result;
+        };
+
+        wrapped[WAVE_PROGRESS_WRAPPED_MARKER] = true;
+        candidate.updateBar = wrapped;
+        detachHook = () => {
+            if (candidate.updateBar === wrapped) {
+                candidate.updateBar = original;
+            }
+        };
+    });
+
+    return () => {
+        if (typeof detachHook === "function") {
+            detachHook();
+            detachHook = null;
+        }
+        stopDetector();
+    };
 }
 
 function inferSkillIdFromString(value) {
@@ -521,6 +728,19 @@ function createLiveState() {
     return {
         activeSkillSlots: [],
         activeSkillButtonCount: NaN,
+        autoSkillMode: AUTO_SKILL_MODE_PUSH,
+        waveCallAvailable: false,
+        waveCallEnabled: true,
+        waveCallName: WAVE_CALL_DISPLAY_NAME,
+        waveCallAmount: "Missing",
+        waveCallReadyCount: 0,
+        speedSkillTriggerEnabled: false,
+        speedSkillTriggerPercent: SPEED_SKILL_TRIGGER_DEFAULT_PERCENT,
+        speedWaveEndDigitEnabled: false,
+        speedWaveEndDigit: "0",
+        waveProgressPercent: NaN,
+        waveProgressAmount: "-",
+        lastSpeedWave: NaN,
         autoSkillEnabledKeys: {}
     };
 }
@@ -542,17 +762,41 @@ function buildDerivedState(state) {
 
 export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null } = {}) {
     const overlay = createAutoSkillerOverlay();
+    const storedSettings = readStoredSettings();
 
     let uninstallActiveSkillButtonObserver = null;
+    let uninstallWaveCallInfoObserver = null;
+    let uninstallBattleManagerObserver = null;
+    let uninstallWaveStartObserver = null;
+    let uninstallWaveProgressObserver = null;
     let warnTimeoutId = null;
     let hardTimeoutId = null;
     let renderIntervalId = null;
     let autoSkillIntervalId = null;
+    let actionQueueTimerId = null;
     let attached = true;
     let autoSkillsEnabled = false;
+    let autoSkillMode = AUTO_SKILL_MODE_PUSH;
+    let waveCallEnabled = storedSettings.waveCallEnabled !== false;
+    let speedSkillTriggerEnabled = storedSettings.speedSkillTriggerEnabled === true;
+    let speedSkillTriggerPercent = normalizeStoredPercent(storedSettings.speedSkillTriggerPercent);
+    let speedWaveEndDigitEnabled = storedSettings.speedWaveEndDigitEnabled === true;
+    let speedWaveEndDigit = normalizeStoredWaveEndDigit(storedSettings.speedWaveEndDigit);
     let hasVisibleState = false;
+    let battleManager = null;
+    let waveCallInfo = null;
+    let lastAutoSkillActionAt = 0;
+    let lastSpeedWave = NaN;
+    let latestWave = NaN;
+    let waveProgressPercent = NaN;
+    let waveProgressCurrent = NaN;
+    let waveProgressTotal = NaN;
+    let speedWaveSkillTriggeredWave = NaN;
+    let normalBattleWasActive = false;
+    let battleManagerStateKnown = false;
     const liveState = createLiveState();
     const activeSkillButtonRefs = new Set();
+    const queuedActions = [];
     const autoSkillEnabledKeys = {};
     const autoSkillLastAttemptAt = new Map();
     const autoSkillReadySinceAt = new Map();
@@ -561,15 +805,43 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
     let autoSkillBoostTargetIndex = 0;
     let autoSkillBoostTargetsMs = [];
 
+    if (storedSettings.autoSkillEnabledKeys && typeof storedSettings.autoSkillEnabledKeys === "object") {
+        for (const [slotKey, enabled] of Object.entries(storedSettings.autoSkillEnabledKeys)) {
+            if (typeof slotKey === "string" && /^slot:[0-2]$/.test(slotKey)) {
+                autoSkillEnabledKeys[slotKey] = enabled !== false;
+            }
+        }
+    }
+
     liveState.autoSkillEnabledKeys = autoSkillEnabledKeys;
 
     window.__EF_AUTO_SKILLER_STATE__ = {
         status: "scanning",
         autoSkills: false,
+        mode: autoSkillMode,
+        waveCallEnabled,
+        speedSkillTriggerEnabled,
+        speedSkillTriggerPercent,
+        speedWaveEndDigitEnabled,
+        speedWaveEndDigit: Number.isFinite(speedWaveEndDigit) ? String(speedWaveEndDigit) : "",
+        waveProgressPercent,
+        normalBattleActive: false,
+        battleManagerStateKnown: false,
         autoSkillEnabledKeys
     };
     window.__EF_AUTO_SKILLER_LIVE_STATE__ = liveState;
     window.__EF_AUTO_SKILLER_ACTIVE_SKILL_BUTTONS__ = activeSkillButtonRefs;
+
+    function persistSettings() {
+        writeStoredSettings({
+            waveCallEnabled,
+            speedSkillTriggerEnabled,
+            speedSkillTriggerPercent,
+            speedWaveEndDigitEnabled,
+            speedWaveEndDigit: Number.isFinite(speedWaveEndDigit) ? String(speedWaveEndDigit) : "",
+            autoSkillEnabledKeys: { ...autoSkillEnabledKeys }
+        });
+    }
 
     function mergeActiveSkillButtonState() {
         liveState.activeSkillButtonCount = activeSkillButtonRefs.size;
@@ -581,11 +853,90 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
         return true;
     }
 
+    function isNormalBattleActive() {
+        return isBattleManager(battleManager) && battleManager.isIdleBattleActive() === true;
+    }
+
+    function clearPendingAutoSkillActions() {
+        autoSkillLastAttemptAt.clear();
+        autoSkillReadySinceAt.clear();
+        autoSkillPendingDelayMs.clear();
+        queuedActions.length = 0;
+    }
+
+    function resetModeRuntimeState() {
+        clearPendingAutoSkillActions();
+        lastAutoSkillActionAt = 0;
+        lastSpeedWave = NaN;
+        latestWave = NaN;
+        waveProgressPercent = NaN;
+        waveProgressCurrent = NaN;
+        waveProgressTotal = NaN;
+        speedWaveSkillTriggeredWave = NaN;
+    }
+
+    function syncNormalBattleState() {
+        const active = isNormalBattleActive();
+        if (active === normalBattleWasActive) {
+            window.__EF_AUTO_SKILLER_STATE__.normalBattleActive = active;
+            window.__EF_AUTO_SKILLER_STATE__.battleManagerStateKnown = battleManagerStateKnown;
+            return active;
+        }
+
+        normalBattleWasActive = active;
+        if (active) {
+            resetModeRuntimeState();
+            mergeActiveSkillButtonState();
+        } else {
+            clearPendingAutoSkillActions();
+        }
+        window.__EF_AUTO_SKILLER_STATE__.normalBattleActive = active;
+        window.__EF_AUTO_SKILLER_STATE__.battleManagerStateKnown = battleManagerStateKnown;
+        return active;
+    }
+
+    function getWaveCallDisplayState() {
+        if (!isWaveCallInfo(waveCallInfo)) {
+            return {
+                available: false,
+                amount: "Missing",
+                readyCount: 0
+            };
+        }
+
+        const readyCount = getWaveCallReadyCount();
+        const maxCall = Math.max(0, Math.floor(sanitizeNumber(waveCallInfo?.maxCall)));
+        const labelText = String(waveCallInfo?.lblNumCall?.text || "").trim();
+        const amount = labelText || `${Math.max(0, readyCount)} / ${Number.isFinite(maxCall) ? maxCall : 0}`;
+        return {
+            available: true,
+            amount,
+            readyCount
+        };
+    }
+
     function render() {
         if (!attached) {
             return;
         }
         mergeActiveSkillButtonState();
+        syncNormalBattleState();
+        const waveCallDisplayState = getWaveCallDisplayState();
+        liveState.autoSkillMode = autoSkillMode;
+        liveState.waveCallAvailable = waveCallDisplayState.available;
+        liveState.waveCallEnabled = waveCallEnabled;
+        liveState.waveCallName = WAVE_CALL_DISPLAY_NAME;
+        liveState.waveCallAmount = waveCallDisplayState.amount;
+        liveState.waveCallReadyCount = waveCallDisplayState.readyCount;
+        liveState.speedSkillTriggerEnabled = speedSkillTriggerEnabled;
+        liveState.speedSkillTriggerPercent = speedSkillTriggerPercent;
+        liveState.speedWaveEndDigitEnabled = speedWaveEndDigitEnabled;
+        liveState.speedWaveEndDigit = Number.isFinite(speedWaveEndDigit) ? String(speedWaveEndDigit) : "";
+        liveState.waveProgressPercent = waveProgressPercent;
+        liveState.waveProgressAmount = Number.isFinite(waveProgressPercent)
+            ? `${Math.round(waveProgressPercent)}%`
+            : "-";
+        liveState.lastSpeedWave = lastSpeedWave;
         overlay.setState(buildDerivedState(liveState));
     }
 
@@ -603,12 +954,93 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
     function setAutoSkillsEnabled(enabled) {
         autoSkillsEnabled = !!enabled;
         if (!autoSkillsEnabled) {
-            autoSkillLastAttemptAt.clear();
-            autoSkillReadySinceAt.clear();
-            autoSkillPendingDelayMs.clear();
+            clearPendingAutoSkillActions();
         }
         window.__EF_AUTO_SKILLER_STATE__.autoSkills = autoSkillsEnabled;
         overlay.setAutoSkillState(autoSkillsEnabled);
+    }
+
+    function setAutoSkillMode(mode) {
+        const nextMode = mode === AUTO_SKILL_MODE_SPEED ? AUTO_SKILL_MODE_SPEED : AUTO_SKILL_MODE_PUSH;
+        const modeChanged = nextMode !== autoSkillMode;
+        autoSkillMode = nextMode;
+        if (modeChanged && autoSkillsEnabled) {
+            setAutoSkillsEnabled(false);
+        }
+        clearPendingAutoSkillActions();
+        liveState.autoSkillMode = autoSkillMode;
+        window.__EF_AUTO_SKILLER_STATE__.mode = autoSkillMode;
+        overlay.setMode(autoSkillMode);
+        render();
+    }
+
+    function setWaveCallEnabled(enabled) {
+        waveCallEnabled = !!enabled;
+        for (let index = queuedActions.length - 1; index >= 0; index--) {
+            if (queuedActions[index]?.type === "wave-call") {
+                queuedActions.splice(index, 1);
+            }
+        }
+        window.__EF_AUTO_SKILLER_STATE__.waveCallEnabled = waveCallEnabled;
+        persistSettings();
+        render();
+    }
+
+    function normalizePercent(value, fallback = SPEED_SKILL_TRIGGER_DEFAULT_PERCENT) {
+        const parsed = Math.floor(sanitizeNumber(value));
+        if (!Number.isFinite(parsed)) {
+            return fallback;
+        }
+        return Math.max(1, Math.min(100, parsed));
+    }
+
+    function normalizeWaveEndDigit(value) {
+        if (value === "" || value === null || value === undefined) {
+            return NaN;
+        }
+        const parsed = Math.floor(sanitizeNumber(value));
+        return Number.isFinite(parsed) && parsed >= 0 && parsed <= 9 ? parsed : NaN;
+    }
+
+    function waveMatchesSpeedEndDigit(wave) {
+        if (!speedWaveEndDigitEnabled || !Number.isFinite(speedWaveEndDigit)) {
+            return true;
+        }
+        const normalizedWave = Math.floor(sanitizeNumber(wave));
+        return Number.isFinite(normalizedWave) && normalizedWave > 0 && normalizedWave % 10 === speedWaveEndDigit;
+    }
+
+    function setSpeedSkillTriggerState({ enabled = null, percent = NaN } = {}) {
+        if (enabled !== null) {
+            speedSkillTriggerEnabled = !!enabled;
+            if (!speedSkillTriggerEnabled) {
+                speedWaveSkillTriggeredWave = NaN;
+            }
+        }
+        if (Number.isFinite(sanitizeNumber(percent))) {
+            speedSkillTriggerPercent = normalizePercent(percent, speedSkillTriggerPercent);
+        }
+        liveState.speedSkillTriggerEnabled = speedSkillTriggerEnabled;
+        liveState.speedSkillTriggerPercent = speedSkillTriggerPercent;
+        window.__EF_AUTO_SKILLER_STATE__.speedSkillTriggerEnabled = speedSkillTriggerEnabled;
+        window.__EF_AUTO_SKILLER_STATE__.speedSkillTriggerPercent = speedSkillTriggerPercent;
+        persistSettings();
+        render();
+    }
+
+    function setSpeedWaveEndDigitState({ enabled = null, digit = null } = {}) {
+        if (enabled !== null) {
+            speedWaveEndDigitEnabled = !!enabled;
+        }
+        if (digit !== null) {
+            speedWaveEndDigit = normalizeWaveEndDigit(digit);
+        }
+        liveState.speedWaveEndDigitEnabled = speedWaveEndDigitEnabled;
+        liveState.speedWaveEndDigit = Number.isFinite(speedWaveEndDigit) ? String(speedWaveEndDigit) : "";
+        window.__EF_AUTO_SKILLER_STATE__.speedWaveEndDigitEnabled = speedWaveEndDigitEnabled;
+        window.__EF_AUTO_SKILLER_STATE__.speedWaveEndDigit = liveState.speedWaveEndDigit;
+        persistSettings();
+        render();
     }
 
     function getActiveSkillSlotIndex(slot, fallbackIndex) {
@@ -628,6 +1060,7 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
         }
         liveState.autoSkillEnabledKeys = { ...autoSkillEnabledKeys };
         window.__EF_AUTO_SKILLER_STATE__.autoSkillEnabledKeys = liveState.autoSkillEnabledKeys;
+        persistSettings();
         render();
     }
 
@@ -672,16 +1105,15 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
 
     resetAutoSkillBoostWindow(autoSkillBoostWindowStartAt);
 
-    function runAutoSkillPress() {
-        if (!attached || !autoSkillsEnabled || !hasVisibleState) {
-            return;
+    function findReadyAutoSkillSlot({ usePendingDelay = true } = {}) {
+        if (!attached || !autoSkillsEnabled || !hasVisibleState || !syncNormalBattleState()) {
+            return null;
         }
 
         mergeActiveSkillButtonState();
 
         const activeSkillSlots = Array.isArray(liveState.activeSkillSlots) ? liveState.activeSkillSlots : [];
         const now = performance.now();
-        let pressedAny = false;
 
         for (let index = 0; index < activeSkillSlots.length; index++) {
             const slot = activeSkillSlots[index];
@@ -709,7 +1141,7 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
             }
 
             const readySinceAt = autoSkillReadySinceAt.get(autoSkillKey) || now;
-            if (now - readySinceAt < getPendingAutoSkillDelayMs(autoSkillKey, now)) {
+            if (usePendingDelay && now - readySinceAt < getPendingAutoSkillDelayMs(autoSkillKey, now)) {
                 continue;
             }
 
@@ -718,41 +1150,241 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
                 continue;
             }
 
-            autoSkillLastAttemptAt.set(autoSkillKey, now);
-            if (pressActiveSkillButton(activeSkillButtonRefs, slotIndex, activeSkillSlots)) {
-                autoSkillReadySinceAt.delete(autoSkillKey);
-                autoSkillPendingDelayMs.delete(autoSkillKey);
-                pressedAny = true;
-            }
+            return {
+                activeSkillSlots,
+                autoSkillKey,
+                slotIndex
+            };
         }
 
-        if (pressedAny) {
+        return null;
+    }
+
+    function pressReadyAutoSkill({ usePendingDelay = true } = {}) {
+        const now = performance.now();
+        if (now - lastAutoSkillActionAt < AUTO_SKILL_ACTION_GAP_MS) {
+            return false;
+        }
+
+        const readySlot = findReadyAutoSkillSlot({ usePendingDelay });
+        if (!readySlot) {
+            return false;
+        }
+
+        const { activeSkillSlots, autoSkillKey, slotIndex } = readySlot;
+        autoSkillLastAttemptAt.set(autoSkillKey, now);
+        if (pressActiveSkillButton(activeSkillButtonRefs, slotIndex, activeSkillSlots)) {
+            autoSkillReadySinceAt.delete(autoSkillKey);
+            autoSkillPendingDelayMs.delete(autoSkillKey);
+            lastAutoSkillActionAt = now;
             window.setTimeout(() => {
                 if (attached) {
                     render();
                 }
             }, 0);
+            return true;
         }
+
+        return false;
+    }
+
+    function updateWaveCallInfoState() {
+        if (!isWaveCallInfo(waveCallInfo)) {
+            return false;
+        }
+        try {
+            if (typeof waveCallInfo.update === "function") {
+                waveCallInfo.update();
+            }
+        } catch (error) {
+            // Ignore UI update failures from game internals.
+        }
+        return true;
+    }
+
+    function getWaveCallReadyCount() {
+        if (!updateWaveCallInfoState()) {
+            return 0;
+        }
+        const labelText = String(waveCallInfo?.lblNumCall?.text || "");
+        const labelMatch = labelText.match(/^\s*([0-9]+)/);
+        const labelCount = labelMatch ? Math.floor(sanitizeNumber(labelMatch[1])) : NaN;
+        if (Number.isFinite(labelCount) && labelCount > 0) {
+            return labelCount;
+        }
+        const energy = sanitizeNumber(waveCallInfo?.energy);
+        const maxEnergy = sanitizeNumber(waveCallInfo?.maxEnergy);
+        return Number.isFinite(energy) && Number.isFinite(maxEnergy) && maxEnergy > 0 && energy >= maxEnergy
+            ? 1
+            : 0;
+    }
+
+    function pressWaveCall() {
+        const now = performance.now();
+        if (!waveCallEnabled || !syncNormalBattleState() || !isWaveCallInfo(waveCallInfo) || now - lastAutoSkillActionAt < AUTO_SKILL_ACTION_GAP_MS) {
+            return false;
+        }
+        const readyCount = getWaveCallReadyCount();
+        if (readyCount <= 0) {
+            return false;
+        }
+
+        try {
+            waveCallInfo.callWave();
+            lastAutoSkillActionAt = now;
+            window.__EF_AUTO_SKILLER_LAST_WAVE_CALL__ = {
+                at: new Date().toISOString(),
+                readyCount
+            };
+            return true;
+        } catch (error) {
+            console.warn("[ef-auto-skiller] wave call failed:", error);
+        }
+        return false;
+    }
+
+    function scheduleQueuedAction(delayMs = 0) {
+        if (actionQueueTimerId !== null || queuedActions.length === 0) {
+            return;
+        }
+        actionQueueTimerId = window.setTimeout(runQueuedAction, Math.max(0, delayMs));
+    }
+
+    function enqueueAction(action) {
+        if (!action || typeof action !== "object") {
+            return;
+        }
+        queuedActions.push(action);
+        scheduleQueuedAction();
+    }
+
+    function runQueuedAction() {
+        actionQueueTimerId = null;
+        if (!attached || !autoSkillsEnabled || autoSkillMode !== AUTO_SKILL_MODE_SPEED || !syncNormalBattleState()) {
+            queuedActions.length = 0;
+            return;
+        }
+
+        const now = performance.now();
+        if (now - lastAutoSkillActionAt < AUTO_SKILL_ACTION_GAP_MS) {
+            scheduleQueuedAction(AUTO_SKILL_ACTION_GAP_MS - (now - lastAutoSkillActionAt));
+            return;
+        }
+
+        const action = queuedActions.shift();
+        if (!action) {
+            return;
+        }
+
+        if (action.type === "wave-call") {
+            pressWaveCall();
+        } else if (action.type === "skill") {
+            pressReadyAutoSkill({ usePendingDelay: false });
+        }
+
+        scheduleQueuedAction(AUTO_SKILL_ACTION_GAP_MS);
+    }
+
+    function runAutoSkillPress() {
+        if (!syncNormalBattleState()) {
+            queuedActions.length = 0;
+            return;
+        }
+        if (autoSkillMode === AUTO_SKILL_MODE_SPEED) {
+            runSpeedWaveSkillTrigger();
+            return;
+        }
+        if (autoSkillMode !== AUTO_SKILL_MODE_PUSH) {
+            return;
+        }
+        pressReadyAutoSkill({ usePendingDelay: true });
+    }
+
+    function runSpeedWaveSkillTrigger() {
+        if (!attached || !autoSkillsEnabled || !syncNormalBattleState() || !speedSkillTriggerEnabled || autoSkillMode !== AUTO_SKILL_MODE_SPEED) {
+            return;
+        }
+        const currentWave = Math.floor(sanitizeNumber(latestWave));
+        if (!Number.isFinite(currentWave) || currentWave <= 0 || speedWaveSkillTriggeredWave === currentWave) {
+            return;
+        }
+        if (!waveMatchesSpeedEndDigit(currentWave)) {
+            return;
+        }
+        const progressPercent = waveProgressPercent;
+        if (!Number.isFinite(progressPercent) || progressPercent < speedSkillTriggerPercent) {
+            return;
+        }
+        if (pressReadyAutoSkill({ usePendingDelay: false })) {
+            speedWaveSkillTriggeredWave = currentWave;
+            window.__EF_AUTO_SKILLER_STATE__.lastSpeedWaveSkill = {
+                at: new Date().toISOString(),
+                wave: currentWave,
+                progressPercent: Math.round(progressPercent)
+            };
+        }
+    }
+
+    function runSpeedWaveStart(wave) {
+        if (!attached || !autoSkillsEnabled || !syncNormalBattleState() || autoSkillMode !== AUTO_SKILL_MODE_SPEED) {
+            return;
+        }
+
+        const normalizedWave = Math.floor(sanitizeNumber(wave));
+        if (!Number.isFinite(normalizedWave) || normalizedWave === lastSpeedWave) {
+            return;
+        }
+
+        latestWave = normalizedWave;
+        lastSpeedWave = normalizedWave;
+        waveProgressCurrent = 0;
+        waveProgressTotal = NaN;
+        waveProgressPercent = 0;
+        speedWaveSkillTriggeredWave = NaN;
+        liveState.lastSpeedWave = lastSpeedWave;
+        window.__EF_AUTO_SKILLER_STATE__.lastSpeedWave = lastSpeedWave;
+        window.__EF_AUTO_SKILLER_STATE__.waveProgressPercent = waveProgressPercent;
+        window.__EF_AUTO_SKILLER_STATE__.waveProgress = {
+            wave: normalizedWave,
+            current: waveProgressCurrent,
+            total: waveProgressTotal,
+            percent: waveProgressPercent
+        };
+        if (!waveMatchesSpeedEndDigit(normalizedWave)) {
+            return;
+        }
+        if (waveCallEnabled) {
+            enqueueAction({ type: "wave-call", wave: normalizedWave });
+        }
+        window.setTimeout(() => {
+            if (attached && autoSkillMode === AUTO_SKILL_MODE_SPEED && autoSkillsEnabled && syncNormalBattleState() && !speedSkillTriggerEnabled) {
+                enqueueAction({ type: "skill", wave: normalizedWave });
+            }
+        }, SPEED_SKILL_DELAY_MS);
     }
 
     overlay.setScanning();
     overlay.setAutoSkillState(autoSkillsEnabled);
+    overlay.setMode(autoSkillMode);
     overlay.onAutoSkillToggle(() => {
         setAutoSkillsEnabled(!autoSkillsEnabled);
         runAutoSkillPress();
     });
+    overlay.onModeChange((mode) => {
+        setAutoSkillMode(mode);
+    });
     overlay.onSlotAutoToggle((slotKey, enabled) => {
         setSlotAutoEnabled(slotKey, enabled);
     });
-    overlay.onSkillAction((slotIndex) => {
-        pressActiveSkillButton(activeSkillButtonRefs, slotIndex, liveState.activeSkillSlots);
-        window.setTimeout(() => {
-            if (attached) {
-                render();
-            }
-        }, 0);
+    overlay.onWaveCallToggle((enabled) => {
+        setWaveCallEnabled(enabled);
     });
-
+    overlay.onSpeedSkillTriggerChange((state) => {
+        setSpeedSkillTriggerState(state);
+    });
+    overlay.onSpeedWaveEndDigitChange((state) => {
+        setSpeedWaveEndDigitState(state);
+    });
     try {
         uninstallActiveSkillButtonObserver = installActiveSkillButtonObserver((candidate) => {
             activeSkillButtonRefs.add(candidate);
@@ -760,6 +1392,45 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
             window.__EF_AUTO_SKILLER_STATE__.status = "live";
             completeScanning();
             render();
+        });
+        uninstallWaveCallInfoObserver = installWaveCallInfoObserver((candidate) => {
+            waveCallInfo = candidate;
+            liveState.waveCallAvailable = true;
+            liveState.waveCallEnabled = waveCallEnabled;
+            window.__EF_AUTO_SKILLER_STATE__.waveCallAvailable = true;
+            window.__EF_AUTO_SKILLER_STATE__.waveCallEnabled = waveCallEnabled;
+            render();
+        });
+        uninstallBattleManagerObserver = installBattleManagerObserver((candidate) => {
+            battleManager = candidate;
+            battleManagerStateKnown = true;
+            syncNormalBattleState();
+            render();
+        });
+        uninstallWaveStartObserver = installWaveStartObserver(({ wave, deltaWave }) => {
+            const normalizedWave = Math.floor(sanitizeNumber(wave));
+            if (Number.isFinite(normalizedWave)) {
+                latestWave = normalizedWave;
+            }
+            if (Number.isFinite(deltaWave) && deltaWave > 0) {
+                runSpeedWaveStart(wave);
+            }
+        });
+        uninstallWaveProgressObserver = installWaveProgressObserver(({ wave, current, total, percent }) => {
+            const normalizedWave = Math.floor(sanitizeNumber(wave));
+            if (Number.isFinite(normalizedWave) && normalizedWave > 0) {
+                latestWave = normalizedWave;
+            }
+            waveProgressCurrent = current;
+            waveProgressTotal = total;
+            waveProgressPercent = percent;
+            window.__EF_AUTO_SKILLER_STATE__.waveProgressPercent = waveProgressPercent;
+            window.__EF_AUTO_SKILLER_STATE__.waveProgress = {
+                wave: Number.isFinite(normalizedWave) ? normalizedWave : latestWave,
+                current: waveProgressCurrent,
+                total: waveProgressTotal,
+                percent: waveProgressPercent
+            };
         });
     } catch (error) {
         overlay.setError("Detector install failed");
@@ -810,9 +1481,29 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
                 window.clearInterval(autoSkillIntervalId);
                 autoSkillIntervalId = null;
             }
+            if (actionQueueTimerId !== null) {
+                window.clearTimeout(actionQueueTimerId);
+                actionQueueTimerId = null;
+            }
             if (typeof uninstallActiveSkillButtonObserver === "function") {
                 uninstallActiveSkillButtonObserver();
                 uninstallActiveSkillButtonObserver = null;
+            }
+            if (typeof uninstallWaveCallInfoObserver === "function") {
+                uninstallWaveCallInfoObserver();
+                uninstallWaveCallInfoObserver = null;
+            }
+            if (typeof uninstallBattleManagerObserver === "function") {
+                uninstallBattleManagerObserver();
+                uninstallBattleManagerObserver = null;
+            }
+            if (typeof uninstallWaveStartObserver === "function") {
+                uninstallWaveStartObserver();
+                uninstallWaveStartObserver = null;
+            }
+            if (typeof uninstallWaveProgressObserver === "function") {
+                uninstallWaveProgressObserver();
+                uninstallWaveProgressObserver = null;
             }
             overlay.remove();
             window.__EF_AUTO_SKILLER_STATE__.status = "detached";
