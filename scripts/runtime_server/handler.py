@@ -27,8 +27,9 @@ from .static_files import choose_static_path, is_within_directory, normalize_app
 
 
 CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
-UPSTREAM_TIMEOUT_SECONDS = 30
-UPSTREAM_MAX_IDLE_CONNECTIONS = 4
+UPSTREAM_TIMEOUT_SECONDS = 15
+UPSTREAM_MAX_IDLE_CONNECTIONS = 8
+UPSTREAM_PRECONNECT_CONNECTIONS = 6
 UPSTREAM_POOL_LOCK = threading.Lock()
 UPSTREAM_POOL: dict[tuple[str, str, int], list[http.client.HTTPConnection]] = {}
 UPSTREAM_HTTPS_CONTEXT = ssl.create_default_context()
@@ -92,13 +93,22 @@ def build_upstream_connection(scheme: str, host: str, port: int) -> http.client.
     return http.client.HTTPConnection(host, port, timeout=UPSTREAM_TIMEOUT_SECONDS)
 
 
-def acquire_upstream_connection(key: tuple[str, str, int]) -> http.client.HTTPConnection:
+def get_remote_upstream_key() -> tuple[str, str, int] | None:
+    remote_base = urllib.parse.urlsplit(REMOTE_BASE)
+    scheme = (remote_base.scheme or "https").lower()
+    if scheme not in {"http", "https"} or not remote_base.hostname:
+        return None
+    port = remote_base.port or (443 if scheme == "https" else 80)
+    return scheme, remote_base.hostname, port
+
+
+def acquire_upstream_connection(key: tuple[str, str, int]) -> tuple[http.client.HTTPConnection, bool]:
     with UPSTREAM_POOL_LOCK:
         idle_connections = UPSTREAM_POOL.get(key)
         if idle_connections:
-            return idle_connections.pop()
+            return idle_connections.pop(), True
     scheme, host, port = key
-    return build_upstream_connection(scheme, host, port)
+    return build_upstream_connection(scheme, host, port), False
 
 
 def release_upstream_connection(
@@ -116,6 +126,37 @@ def release_upstream_connection(
             close_upstream_connection(connection)
             return
         idle_connections.append(connection)
+
+
+def add_idle_upstream_connection(
+    key: tuple[str, str, int],
+    connection: http.client.HTTPConnection,
+) -> bool:
+    with UPSTREAM_POOL_LOCK:
+        idle_connections = UPSTREAM_POOL.setdefault(key, [])
+        if len(idle_connections) >= UPSTREAM_MAX_IDLE_CONNECTIONS:
+            close_upstream_connection(connection)
+            return False
+        idle_connections.append(connection)
+        return True
+
+
+def start_upstream_preconnect(count: int = UPSTREAM_PRECONNECT_CONNECTIONS) -> None:
+    upstream_key = get_remote_upstream_key()
+    if not upstream_key or count <= 0:
+        return
+
+    def preconnect_one(index: int) -> None:
+        connection = build_upstream_connection(*upstream_key)
+        try:
+            connection.connect()
+            add_idle_upstream_connection(upstream_key, connection)
+        except Exception:
+            close_upstream_connection(connection)
+
+    for index in range(count):
+        thread = threading.Thread(target=preconnect_one, args=(index + 1,), name=f"upstream-preconnect-{index + 1}", daemon=True)
+        thread.start()
 
 
 class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
@@ -396,17 +437,24 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         upstream_key = (scheme, host, port)
         last_error: Exception | None = None
         for attempt in range(2):
-            connection = build_upstream_connection(scheme, host, port) if attempt == 1 else acquire_upstream_connection(upstream_key)
+            if attempt == 1:
+                connection = build_upstream_connection(scheme, host, port)
+            else:
+                connection, _ = acquire_upstream_connection(upstream_key)
             response: http.client.HTTPResponse | None = None
             reusable = False
             try:
+                if connection.sock is None:
+                    connection.connect()
+
                 connection.request(method, upstream_selector, body=body, headers=request_headers)
                 response = connection.getresponse()
+                upstream_headers = response.getheaders()
 
                 wrote_success = self._write_streaming_response(
                     response.status,
                     response,
-                    upstream_headers=response.getheaders(),
+                    upstream_headers=upstream_headers,
                 )
                 if method == "HEAD":
                     response.read()
@@ -415,7 +463,6 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
                     wrote_success
                     and connection.sock is not None
                     and not getattr(response, "will_close", True)
-                    and not self.close_connection
                 )
                 release_upstream_connection(upstream_key, connection, reusable)
                 return
@@ -426,6 +473,8 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             except (http.client.HTTPException, OSError, ssl.SSLError, TimeoutError) as error:
                 last_error = error
                 release_upstream_connection(upstream_key, connection, False)
+                if get_logging_flags()["showRequestLogs"]:
+                    log_http(f"PROXY {method} {upstream_selector} attempt {attempt + 1} failed: {error}")
                 if attempt == 0:
                     continue
             except Exception as error:  # pragma: no cover
@@ -582,16 +631,32 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         upstream_headers: object | None = None,
     ) -> bool:
         try:
-            self.send_response(status_code)
             has_content_length = False
             if upstream_headers:
-                has_content_length = self._copy_upstream_headers(upstream_headers)
-            if not has_content_length:
-                self.send_header("Connection", "close")
-                self.close_connection = True
+                has_content_length = any(str(header).lower() == "content-length" for header, _ in upstream_headers)
+
+            buffered_payload = None
+            if not has_content_length and getattr(self, "command", "") != "HEAD":
+                chunks = []
+                while True:
+                    chunk = upstream_response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                buffered_payload = b"".join(chunks)
+
+            self.send_response(status_code)
+            if upstream_headers:
+                self._copy_upstream_headers(upstream_headers, skip_content_length=buffered_payload is not None)
+            if buffered_payload is not None:
+                self.send_header("Content-Length", str(len(buffered_payload)))
             self.end_headers()
 
             if getattr(self, "command", "") == "HEAD":
+                return True
+
+            if buffered_payload is not None:
+                self.wfile.write(buffered_payload)
                 return True
 
             while True:

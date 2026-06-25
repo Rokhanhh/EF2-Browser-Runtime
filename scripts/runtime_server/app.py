@@ -16,7 +16,7 @@ from .config import (
     LISTEN_PORT,
     RUNTIME_ROOT,
 )
-from .handler import RuntimeHandler
+from .handler import RuntimeHandler, start_upstream_preconnect
 from .logging_utils import log_credits, log_server, log_server_status
 
 
@@ -96,6 +96,7 @@ def main() -> None:
 
     RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
     state.set_active_bundle(*prepare_remote_bundle())
+    start_upstream_preconnect()
 
     class ThreadingTCPServer(socketserver.ThreadingTCPServer):
         allow_reuse_address = True
