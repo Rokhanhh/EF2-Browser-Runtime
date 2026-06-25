@@ -34,6 +34,14 @@ When the game opens, choose **Google** or **Apple** login and sign in with the c
 - It rebuilds `GameBundle.zip` under `runtime/bundles/merged/<version>/` and mounts extracted runtime files under `runtime/bundles/mounted/<version>/`.
 - Static bundle content is served locally, while remote API/WebSocket traffic is proxied to avoid browser-origin issues.
 
+## Runtime Plugins
+
+Browser-side features such as wave tracking and auto skilling are installed through a frontend plugin runtime.
+
+Local plugin folders can be copied into `plugins/`; each plugin folder needs a `plugin.json` descriptor and a JS entry file.
+
+See [`plugins/README.md`](plugins/README.md) for the plugin contract, available APIs, and examples.
+
 
 ## Troubleshooting
 

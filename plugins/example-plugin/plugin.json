@@ -1,0 +1,7 @@
+{
+  "id": "example-plugin",
+  "name": "Example Plugin",
+  "enabled": false,
+  "entry": "plugin.js",
+  "handleKey": "__EF_EXAMPLE_PLUGIN_HANDLE__"
+}

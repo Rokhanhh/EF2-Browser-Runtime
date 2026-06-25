@@ -3,6 +3,7 @@ from __future__ import annotations
 import http.client
 import http.server
 import json
+import mimetypes
 import re
 import select
 import socket
@@ -18,11 +19,11 @@ from .config import (
     REMOTE_WS_ORIGIN,
     WS_PROXY_PREFIX,
     WEB_ROOT,
-    get_feature_flags,
     get_logging_flags,
 )
 from .bundle import prepare_remote_bundle
 from .logging_utils import log_error, log_http
+from .plugins import PLUGIN_MANIFEST_PATH, PLUGIN_ROUTE_PREFIX, build_plugins_manifest, resolve_plugin_asset_path
 from .static_files import choose_static_path, is_within_directory, normalize_app_path
 
 
@@ -78,7 +79,6 @@ def build_browser_runtime_config() -> dict[str, str]:
         "proxyPrefix": PROXY_PREFIX,
         "wsProxyPrefix": WS_PROXY_PREFIX,
         "appBasePath": APP_BASE_PATH,
-        **get_feature_flags(),
     }
 
 
@@ -178,6 +178,7 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         if (
             normalized_path in {"/", "/index.html", "/game-manifest.json", "/assets/index.js", "/assets/index.css"}
             or normalized_path.startswith("/bootstrap/")
+            or request_path.startswith(PLUGIN_ROUTE_PREFIX)
         ):
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
             self.send_header("Pragma", "no-cache")
@@ -243,6 +244,14 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if request_path == PLUGIN_MANIFEST_PATH:
+            self._serve_plugins_manifest()
+            return
+        if request_path.startswith(PLUGIN_ROUTE_PREFIX + "/"):
+            if self._serve_plugin_asset(request_path):
+                return
+            self.send_error(404, "Plugin asset not found")
+            return
         if is_app_request and normalized_path in INTEGRITY_CHECK_PATHS:
             state.ensure_active_bundle_integrity(prepare_remote_bundle)
         if is_app_request and normalized_path in {"/", "/index.html"}:
@@ -268,6 +277,14 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Location", f"{APP_BASE_PATH}/")
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+        if request_path == PLUGIN_MANIFEST_PATH:
+            self._serve_plugins_manifest(head_only=True)
+            return
+        if request_path.startswith(PLUGIN_ROUTE_PREFIX + "/"):
+            if self._serve_plugin_asset(request_path, head_only=True):
+                return
+            self.send_error(404, "Plugin asset not found")
             return
         if is_app_request and normalized_path in INTEGRITY_CHECK_PATHS:
             state.ensure_active_bundle_integrity(prepare_remote_bundle)
@@ -329,6 +346,39 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
                 raise
             self.close_connection = True
             return True
+
+    def _serve_plugins_manifest(self, head_only: bool = False) -> None:
+        payload = json.dumps(build_plugins_manifest()).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(payload)
+
+    def _serve_plugin_asset(self, request_path: str, head_only: bool = False) -> bool:
+        asset_path = resolve_plugin_asset_path(urllib.parse.unquote(request_path))
+        if not asset_path:
+            return False
+
+        try:
+            payload = asset_path.read_bytes()
+        except OSError:
+            return False
+
+        content_type = mimetypes.guess_type(str(asset_path))[0] or "application/octet-stream"
+        if asset_path.suffix == ".js":
+            content_type = "text/javascript; charset=utf-8"
+        elif asset_path.suffix == ".json":
+            content_type = "application/json; charset=utf-8"
+
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(payload)
+        return True
 
     def _inject_runtime_config_script(self, html: str) -> str:
         if f'id="{RUNTIME_CONFIG_SCRIPT_ID}"' in html:

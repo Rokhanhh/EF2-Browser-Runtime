@@ -1,6 +1,12 @@
 import { PROXY_PREFIX, REMOTE_ORIGIN, REMOTE_WS_ORIGIN, WS_PROXY_PREFIX } from "./config.js";
-
-const REBIRTH_TIER_STORAGE_KEY = "__EF_HERO_REBIRTH_MEDAL_TIER_CACHE__";
+import {
+    createBodyReaders,
+    notifyRequest,
+    notifyResponse,
+    notifyWebSocketCreate,
+    notifyWebSocketMessage,
+    notifyWebSocketSend
+} from "./networkBus.js";
 
 function proxiedUrl(input) {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : null;
@@ -34,225 +40,129 @@ function extractUrl(input) {
     return "";
 }
 
-function isGetBatchUrl(url) {
-    return typeof url === "string" && url.toLowerCase().includes("getbatch");
+function extractMethod(input, init) {
+    if (init && typeof init.method === "string") {
+        return init.method.toUpperCase();
+    }
+    if (input && typeof input === "object" && typeof input.method === "string") {
+        return input.method.toUpperCase();
+    }
+    return "GET";
 }
 
-function resolveBatchVersion(payload) {
-    const candidates = [
-        payload && payload.version,
-        payload && payload.body && payload.body.version,
-        payload && payload.body && payload.body.user && payload.body.user.version,
-        window.appBundleVersion
-    ];
-    for (const candidate of candidates) {
-        if (typeof candidate === "string" && candidate.trim()) {
-            return candidate.trim();
-        }
-        if (typeof candidate === "number" && Number.isFinite(candidate)) {
-            return String(candidate);
-        }
+function snapshotHeaders(headers) {
+    if (!headers || typeof headers.forEach !== "function") {
+        return Object.freeze({});
     }
-    return "unknown";
-}
-
-function extractRebirthMedalTierEntries(payload) {
-    const body = payload && payload.body;
-    if (!Array.isArray(body)) {
-        return [];
-    }
-
-    const targetBook = body.find((entry) => (
-        entry
-        && typeof entry === "object"
-        && entry.bookName === "HERO_REBIRTH_MEDAL_TIER"
-        && Array.isArray(entry.data)
-    ));
-    if (!targetBook) {
-        return [];
-    }
-
-    const rows = targetBook.data.filter((row) => row && typeof row === "object");
-    if (rows.length > 0 && typeof rows[0].medal === "string") {
-        const values = rows[0].medal
-            .split("|")
-            .map((value) => Number(value))
-            .filter((value) => Number.isFinite(value) && value >= 0);
-        const entries = values.map((medalValue, index) => [((index + 1) * 10), medalValue]);
-        if (entries.length > 0) {
-            return entries;
-        }
-    }
-
-    const medalKeyCandidates = ["medal", "medals", "rewardMedal", "baseMedal", "reward", "value", "amount"];
-    const waveKeyCandidates = ["wave", "level", "tier", "stage"];
-
-    let waveKey = null;
-    for (const candidate of waveKeyCandidates) {
-        const hasCandidate = rows.some((row) => Number.isFinite(Number(row[candidate])));
-        if (hasCandidate) {
-            waveKey = candidate;
-            break;
-        }
-    }
-    if (!waveKey) {
-        const numericKeys = new Map();
-        for (const row of rows.slice(0, 20)) {
-            for (const key of Object.keys(row)) {
-                if (Number.isFinite(Number(row[key]))) {
-                    numericKeys.set(key, (numericKeys.get(key) || 0) + 1);
-                }
-            }
-        }
-        waveKey = Array.from(numericKeys.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-    }
-
-    let medalKey = null;
-    for (const candidate of medalKeyCandidates) {
-        const hasCandidate = rows.some((row) => Number.isFinite(Number(row[candidate])));
-        if (hasCandidate) {
-            medalKey = candidate;
-            break;
-        }
-    }
-    if (!medalKey) {
-        const numericKeys = new Map();
-        for (const row of rows.slice(0, 20)) {
-            for (const key of Object.keys(row)) {
-                if (key === waveKey) {
-                    continue;
-                }
-                if (Number.isFinite(Number(row[key]))) {
-                    numericKeys.set(key, (numericKeys.get(key) || 0) + 1);
-                }
-            }
-        }
-        medalKey = Array.from(numericKeys.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-    }
-
-    const waveToMedal = new Map();
-    for (const row of rows) {
-        if (!row || typeof row !== "object") {
-            continue;
-        }
-        const rawWave = Number(waveKey ? row[waveKey] : NaN);
-        if (!Number.isFinite(rawWave) || rawWave <= 0 || rawWave % 10 !== 0) {
-            continue;
-        }
-
-        let medalValue = NaN;
-        if (medalKey) {
-            const rawMedal = Number(row[medalKey]);
-            if (Number.isFinite(rawMedal) && rawMedal >= 0) {
-                medalValue = rawMedal;
-            }
-        }
-        if (!Number.isFinite(medalValue)) {
-            for (const candidate of medalKeyCandidates) {
-                const rawMedal = Number(row[candidate]);
-                if (Number.isFinite(rawMedal) && rawMedal >= 0) {
-                    medalValue = rawMedal;
-                    break;
-                }
-            }
-        }
-        if (!Number.isFinite(medalValue)) {
-            continue;
-        }
-
-        waveToMedal.set(Math.floor(rawWave), medalValue);
-    }
-
-    return Array.from(waveToMedal.entries()).sort((a, b) => a[0] - b[0]);
-}
-
-function storeRebirthMedalTier({ payload, sourceUrl }) {
-    const sortedEntries = extractRebirthMedalTierEntries(payload);
-    if (sortedEntries.length === 0) {
-        return;
-    }
-
-    const version = resolveBatchVersion(payload);
-    const waveToMedal = Object.fromEntries(sortedEntries);
-
-    if (!window.__EF_BATCH_WAVE_MEDALS__) {
-        window.__EF_BATCH_WAVE_MEDALS__ = { byVersion: {}, latestVersion: null };
-    }
-
-    window.__EF_BATCH_WAVE_MEDALS__.byVersion[version] = {
-        version,
-        sourceUrl,
-        capturedAt: new Date().toISOString(),
-        entries: sortedEntries,
-        waveToMedal
-    };
-    window.__EF_BATCH_WAVE_MEDALS__.latestVersion = version;
-    window.__EF_HERO_REBIRTH_MEDAL_TIER__ = {
-        version,
-        sourceUrl,
-        capturedAt: new Date().toISOString(),
-        entries: sortedEntries,
-        waveToMedal
-    };
-
+    const snapshot = {};
     try {
-        window.localStorage.setItem(
-            REBIRTH_TIER_STORAGE_KEY,
-            JSON.stringify(window.__EF_BATCH_WAVE_MEDALS__)
-        );
+        headers.forEach((value, key) => {
+            snapshot[key] = value;
+        });
     } catch (error) {
-        // Ignore persistence errors.
+        return Object.freeze({});
+    }
+    return Object.freeze(snapshot);
+}
+
+function snapshotProtocols(protocols) {
+    if (Array.isArray(protocols)) {
+        return Object.freeze(protocols.slice());
+    }
+    if (typeof protocols === "string") {
+        return protocols;
+    }
+    return null;
+}
+
+function snapshotWebSocketData(data) {
+    if (typeof data === "string") {
+        return data;
+    }
+    if (data instanceof ArrayBuffer) {
+        return data.slice(0);
+    }
+    if (ArrayBuffer.isView(data)) {
+        return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+    }
+    if (typeof Blob !== "undefined" && data instanceof Blob) {
+        return data.slice(0, data.size, data.type);
+    }
+    return null;
+}
+
+function installSocketObservers(socket, { url, proxied, protocols }) {
+    notifyWebSocketCreate({
+        type: "websocket",
+        url,
+        proxiedUrl: proxied,
+        protocols: snapshotProtocols(protocols)
+    });
+
+    if (socket && typeof socket.addEventListener === "function") {
+        socket.addEventListener("message", (event) => {
+            notifyWebSocketMessage({
+                type: "websocket",
+                url,
+                proxiedUrl: proxied,
+                data: snapshotWebSocketData(event.data)
+            });
+        });
+    }
+
+    if (socket && typeof socket.send === "function" && !socket.__efSendObserved) {
+        try {
+            const nativeSend = socket.send;
+            socket.send = function observedSend(data) {
+                notifyWebSocketSend({
+                    type: "websocket",
+                    url,
+                    proxiedUrl: proxied,
+                    data: snapshotWebSocketData(data)
+                });
+                return nativeSend.call(this, data);
+            };
+            socket.__efSendObserved = true;
+        } catch (error) {
+            // Sending still works; only plugin observation is unavailable.
+        }
     }
 }
 
 export function installNetworkProxy() {
-    let persistedStore = null;
-    try {
-        const raw = window.localStorage.getItem(REBIRTH_TIER_STORAGE_KEY);
-        if (raw) {
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === "object" && parsed.byVersion && typeof parsed.byVersion === "object") {
-                persistedStore = parsed;
-            }
-        }
-    } catch (error) {
-        // Ignore restore errors.
+    if (window.__EF_NETWORK_PROXY_INSTALLED__) {
+        return;
     }
-
-    if (!window.__EF_BATCH_WAVE_MEDALS__) {
-        window.__EF_BATCH_WAVE_MEDALS__ = persistedStore || { byVersion: {}, latestVersion: null };
-    }
-    if (!window.__EF_BATCH_WAVE_MEDALS__.latestVersion) {
-        const versions = Object.keys(window.__EF_BATCH_WAVE_MEDALS__.byVersion || {});
-        if (versions.length > 0) {
-            window.__EF_BATCH_WAVE_MEDALS__.latestVersion = versions[versions.length - 1];
-        }
-    }
-    if (!window.__EF_HERO_REBIRTH_MEDAL_TIER__) {
-        const latestVersion = window.__EF_BATCH_WAVE_MEDALS__.latestVersion;
-        if (latestVersion && window.__EF_BATCH_WAVE_MEDALS__.byVersion[latestVersion]) {
-            window.__EF_HERO_REBIRTH_MEDAL_TIER__ = window.__EF_BATCH_WAVE_MEDALS__.byVersion[latestVersion];
-        }
-    }
+    window.__EF_NETWORK_PROXY_INSTALLED__ = true;
 
     const nativeFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
         const originalUrl = extractUrl(input);
         const proxied = proxiedUrl(input);
-        const response = await nativeFetch(proxied, init);
+        const method = extractMethod(input, init);
 
-        if (isGetBatchUrl(originalUrl)) {
-            try {
-                const cloned = response.clone();
-                const text = await cloned.text();
-                if (text) {
-                    const payload = JSON.parse(text);
-                    storeRebirthMedalTier({ payload, sourceUrl: originalUrl });
-                }
-            } catch (error) {
-                // Ignore parse/store errors to keep runtime stable.
-            }
-        }
+        await notifyRequest({
+            type: "fetch",
+            method,
+            url: originalUrl,
+            proxiedUrl: typeof proxied === "string" ? proxied : extractUrl(proxied)
+        });
+
+        const response = await nativeFetch(proxied, init);
+        const responseClone = response.clone();
+        const readers = createBodyReaders({ response: responseClone });
+
+        await notifyResponse({
+            type: "fetch",
+            method,
+            url: originalUrl,
+            proxiedUrl: typeof proxied === "string" ? proxied : extractUrl(proxied),
+            status: response.status,
+            ok: response.ok,
+            headers: snapshotHeaders(response.headers),
+            readText: readers.readText,
+            readJson: readers.readJson
+        });
 
         return response;
     };
@@ -264,10 +174,11 @@ export function installNetworkProxy() {
             if (proxied !== url) {
                 console.info("[ef-runtime] WebSocket proxied.", { from: url, to: proxied });
             }
-            if (protocols === undefined) {
-                return new NativeWebSocket(proxied);
-            }
-            return new NativeWebSocket(proxied, protocols);
+            const socket = protocols === undefined
+                ? new NativeWebSocket(proxied)
+                : new NativeWebSocket(proxied, protocols);
+            installSocketObservers(socket, { url: extractUrl(url) || String(url || ""), proxied, protocols });
+            return socket;
         };
         PatchedWebSocket.prototype = NativeWebSocket.prototype;
         PatchedWebSocket.CONNECTING = NativeWebSocket.CONNECTING;
@@ -291,29 +202,45 @@ export function installNetworkProxy() {
     const nativeOpen = NativeXHR.prototype.open;
     const nativeSend = NativeXHR.prototype.send;
     NativeXHR.prototype.open = function patchedOpen(method, url, ...rest) {
+        this.__efOriginalMethod = String(method || "GET").toUpperCase();
         this.__efOriginalUrl = extractUrl(url);
-        return nativeOpen.call(this, method, proxiedUrl(url), ...rest);
+        const proxied = proxiedUrl(url);
+        this.__efProxiedUrl = typeof proxied === "string" ? proxied : extractUrl(proxied);
+        return nativeOpen.call(this, method, proxied, ...rest);
     };
 
     NativeXHR.prototype.send = function patchedSend(body) {
+        notifyRequest({
+            type: "xhr",
+            method: this.__efOriginalMethod || "GET",
+            url: this.__efOriginalUrl || "",
+            proxiedUrl: this.__efProxiedUrl || ""
+        });
+
         this.addEventListener("readystatechange", () => {
             if (this.readyState !== 4) {
                 return;
             }
-            if (!isGetBatchUrl(this.__efOriginalUrl || "")) {
-                return;
-            }
+            let text = "";
             try {
-                const text = typeof this.responseText === "string" ? this.responseText : "";
-                if (!text) {
-                    return;
-                }
-                const payload = JSON.parse(text);
-                storeRebirthMedalTier({ payload, sourceUrl: this.__efOriginalUrl || "" });
+                text = typeof this.responseText === "string" ? this.responseText : "";
             } catch (error) {
-                // Ignore parse/store errors to keep runtime stable.
+                text = "";
             }
+            const readers = createBodyReaders({ text });
+            notifyResponse({
+                type: "xhr",
+                method: this.__efOriginalMethod || "GET",
+                url: this.__efOriginalUrl || "",
+                proxiedUrl: this.__efProxiedUrl || "",
+                status: this.status,
+                ok: this.status >= 200 && this.status < 300,
+                responseText: text,
+                readText: readers.readText,
+                readJson: readers.readJson
+            });
         }, { once: true });
+
         return nativeSend.call(this, body);
     };
 }

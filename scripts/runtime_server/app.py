@@ -18,6 +18,7 @@ from .config import (
 )
 from .handler import RuntimeHandler, start_upstream_preconnect
 from .logging_utils import log_credits, log_server, log_server_status
+from .plugins import discover_local_plugins
 
 
 STOP_HOTKEY_TEXT = "Ctrl+Q"
@@ -44,8 +45,14 @@ def build_server_url(port: int) -> str:
 
 def log_runtime_ready(server_url: str) -> None:
     bundle_version = state.get_active_bundle_version()
+    local_plugins = discover_local_plugins()
     log_server(f"Ready: {server_url}")
     log_server(f"Bundle: {bundle_version}")
+    if local_plugins:
+        plugin_names = ", ".join(str(plugin.get("id") or plugin.get("name")) for plugin in local_plugins)
+        log_server(f"Local plugins: {plugin_names}")
+    else:
+        log_server("Local plugins: none")
     log_server(f"Press {STOP_HOTKEY_TEXT} to stop and close")
 
 

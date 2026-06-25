@@ -1,0 +1,7 @@
+{
+  "id": "auto-skiller",
+  "name": "Auto Skiller",
+  "enabled": true,
+  "entry": "plugin.js",
+  "handleKey": "__EF_AUTO_SKILLER_HANDLE__"
+}

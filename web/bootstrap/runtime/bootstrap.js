@@ -1,13 +1,8 @@
 import { ensureBrowserGlobals } from "./globals.js";
 import { callGameStart, loadCssFile, loadManifest, loadModule } from "./loader.js";
+import { createPluginRuntime } from "./pluginRuntime.js";
+import { installRuntimePlugins } from "./plugins.js";
 import { setLoaderState, setStatus, showError } from "./ui.js";
-import { attachAutoSkiller } from "./auto-skiller/index.js";
-import { attachWaveTracker } from "./wave-tracker/index.js";
-
-function isRuntimeFeatureEnabled(key) {
-    const runtimeConfig = window.__EF_RUNTIME_CONFIG__ || {};
-    return runtimeConfig[key] !== false;
-}
 
 async function waitForSplashFirstPaint() {
     // Let the splash render before loading the heavy game module.
@@ -45,27 +40,13 @@ async function bootstrapRuntime() {
         }
     }
 
-    if (isRuntimeFeatureEnabled("showWaveTracker") && !window.__EF_WAVE_TRACKER_HANDLE__) {
-        try {
-            window.__EF_WAVE_TRACKER_HANDLE__ = attachWaveTracker({
-                scanWarnMs: 15000,
-                scanHardTimeoutMs: null
-            });
-        } catch (error) {
-            console.warn("[ef-runtime] wave tracker install failed:", error);
-        }
-    }
-
-    if (isRuntimeFeatureEnabled("showAutoSkiller") && !window.__EF_AUTO_SKILLER_HANDLE__) {
-        try {
-            window.__EF_AUTO_SKILLER_HANDLE__ = attachAutoSkiller({
-                scanWarnMs: 15000,
-                scanHardTimeoutMs: null
-            });
-        } catch (error) {
-            console.warn("[ef-runtime] auto skiller install failed:", error);
-        }
-    }
+    const runtime = createPluginRuntime({
+        manifest,
+        version: manifest.version || "0.0.0",
+        config: window.__EF_RUNTIME_CONFIG__ || {}
+    });
+    window.__EF_PLUGIN_RUNTIME__ = runtime;
+    await installRuntimePlugins(runtime);
 
     setLoaderState("loading-module");
     setStatus("Loading game module...");

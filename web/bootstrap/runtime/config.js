@@ -4,8 +4,6 @@ export const REMOTE_ORIGIN = runtimeConfig.remoteOrigin;
 export const REMOTE_WS_ORIGIN = runtimeConfig.remoteWsOrigin;
 export const PROXY_PREFIX = runtimeConfig.proxyPrefix;
 export const WS_PROXY_PREFIX = runtimeConfig.wsProxyPrefix;
-export const SHOW_WAVE_TRACKER = runtimeConfig.showWaveTracker !== false;
-export const SHOW_AUTO_SKILLER = runtimeConfig.showAutoSkiller !== false;
 
 export const FIREBASE_DEFAULT_CONFIG = {
     apiKey: "AIzaSyC_ZDJUKRitUUZIwYK3LPe1qqZooG3kL6A",

@@ -7,6 +7,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 WEB_ROOT = ROOT / "web"
+PLUGINS_ROOT = ROOT / "plugins"
 RUNTIME_ROOT = ROOT / "runtime"
 BUNDLE_CACHE_ROOT = RUNTIME_ROOT / "bundles"
 CONFIG_PATH = ROOT / "config.json"
@@ -49,14 +50,6 @@ PROXY_PREFIX = "/__ef_proxy__"
 WS_PROXY_PREFIX = "/__ef_ws_proxy__"
 APP_BASE_PATH = "/endlessfrontier2"
 LISTEN_PORT = _get_port(CONFIG, "listenPort", 8080)
-
-def get_feature_flags() -> dict[str, bool]:
-    features_config = _get_section(get_config(), "features")
-    return {
-        "showWaveTracker": _get_bool(features_config, "showWaveTracker", True),
-        "showAutoSkiller": _get_bool(features_config, "showAutoSkiller", True),
-    }
-
 
 def get_logging_flags() -> dict[str, bool]:
     logging_config = _get_section(get_config(), "logging")

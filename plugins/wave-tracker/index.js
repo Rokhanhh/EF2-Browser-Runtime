@@ -1,4 +1,4 @@
-import { installWaveCandidateDetector } from "./detector.js";
+import { installWaveCandidateDetector } from "/endlessfrontier2/bootstrap/runtime/wave-detector.js";
 import { createWaveMetrics } from "./metrics.js";
 import { createWaveOverlay } from "./overlay.js";
 
@@ -260,7 +260,7 @@ function getGameMpmMinute(rebirthTimeSec) {
         : NaN;
 }
 
-export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null } = {}) {
+export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null, hooks = null } = {}) {
     const overlay = createWaveOverlay();
     const metrics = createWaveMetrics();
 
@@ -376,33 +376,30 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
         }
     }
 
-    function installJsonProfileObserver() {
-        const nativeParse = JSON.parse;
-
-        JSON.parse = function patchedParse(text, reviver) {
-            const parsed = nativeParse(text, reviver);
-            try {
-                const user = parsed && parsed.body && parsed.body.user;
-                if (user && typeof user === "object") {
-                    const parsedMaxWave = Number(user.maxWave);
-                    if (Number.isFinite(parsedMaxWave)) {
-                        maxWave = parsedMaxWave;
-                    }
-                    const parsedWave = Number(user.wave);
-                    if (Number.isFinite(parsedWave)) {
-                        profileWave = parsedWave;
-                    }
-                    updateProfileLastReviveTime(user.lastReviveTime);
+    function handleParsedProfilePayload(parsed) {
+        try {
+            const user = parsed && parsed.body && parsed.body.user;
+            if (user && typeof user === "object") {
+                const parsedMaxWave = Number(user.maxWave);
+                if (Number.isFinite(parsedMaxWave)) {
+                    maxWave = parsedMaxWave;
                 }
-            } catch (error) {
-                // Keep parser stable.
+                const parsedWave = Number(user.wave);
+                if (Number.isFinite(parsedWave)) {
+                    profileWave = parsedWave;
+                }
+                updateProfileLastReviveTime(user.lastReviveTime);
             }
-            return parsed;
-        };
+        } catch (error) {
+            // Keep parser stable.
+        }
+    }
 
-        return () => {
-            JSON.parse = nativeParse;
-        };
+    function installJsonProfileObserver() {
+        if (hooks && typeof hooks.onJsonParse === "function") {
+            return hooks.onJsonParse(handleParsedProfilePayload);
+        }
+        return () => {};
     }
 
     function hookController(controller) {
@@ -570,7 +567,9 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
 
     overlay.setScanning();
     try {
-        stopDetector = installWaveCandidateDetector(hookController);
+        stopDetector = hooks && typeof hooks.onWaveController === "function"
+            ? hooks.onWaveController(hookController)
+            : installWaveCandidateDetector(hookController);
     } catch (error) {
         overlay.setError("detector install failed");
         return { detach() {} };

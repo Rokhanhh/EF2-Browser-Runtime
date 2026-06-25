@@ -1,0 +1,7 @@
+{
+  "id": "wave-tracker",
+  "name": "Wave Tracker",
+  "enabled": true,
+  "entry": "plugin.js",
+  "handleKey": "__EF_WAVE_TRACKER_HANDLE__"
+}

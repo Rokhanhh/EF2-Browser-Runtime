@@ -1,5 +1,5 @@
-import { installObjectPropertyCandidateDetector } from "../property-detector.js";
-import { installWaveCandidateDetector } from "../wave-tracker/detector.js";
+import { installObjectPropertyCandidateDetector } from "/endlessfrontier2/bootstrap/runtime/property-detector.js";
+import { installWaveCandidateDetector } from "/endlessfrontier2/bootstrap/runtime/wave-detector.js";
 import { createAutoSkillerOverlay } from "./overlay.js";
 
 const ACTIVE_SKILL_FPS = 60;
@@ -102,8 +102,11 @@ function isActiveSkillButton(candidate) {
         && typeof candidate.onEnter === "function";
 }
 
-function installActiveSkillButtonObserver(onCandidate) {
-    return installObjectPropertyCandidateDetector(["remainingFrames"], (candidate) => {
+function installActiveSkillButtonObserver(onCandidate, hooks = null) {
+    const installDetector = hooks && typeof hooks.onObjectWithProperties === "function"
+        ? hooks.onObjectWithProperties
+        : installObjectPropertyCandidateDetector;
+    return installDetector(["remainingFrames"], (candidate) => {
         if (!isPotentialActiveSkillButton(candidate)) {
             return;
         }
@@ -124,8 +127,11 @@ function isWaveCallInfo(candidate) {
         && Number.isFinite(sanitizeNumber(candidate.pendingCalls));
 }
 
-function installWaveCallInfoObserver(onCandidate) {
-    return installObjectPropertyCandidateDetector(["pendingCalls", "maxEnergy", "lastCallTime"], (candidate) => {
+function installWaveCallInfoObserver(onCandidate, hooks = null) {
+    const installDetector = hooks && typeof hooks.onObjectWithProperties === "function"
+        ? hooks.onObjectWithProperties
+        : installObjectPropertyCandidateDetector;
+    return installDetector(["pendingCalls", "maxEnergy", "lastCallTime"], (candidate) => {
         if (!isWaveCallInfo(candidate)) {
             return;
         }
@@ -145,8 +151,11 @@ function isBattleManager(candidate) {
         && typeof candidate.isIdleBattleActive === "function";
 }
 
-function installBattleManagerObserver(onCandidate) {
-    return installObjectPropertyCandidateDetector(["currentBattle", "idleBattle", "battleState"], (candidate) => {
+function installBattleManagerObserver(onCandidate, hooks = null) {
+    const installDetector = hooks && typeof hooks.onObjectWithProperties === "function"
+        ? hooks.onObjectWithProperties
+        : installObjectPropertyCandidateDetector;
+    return installDetector(["currentBattle", "idleBattle", "battleState"], (candidate) => {
         if (!isBattleManager(candidate)) {
             return;
         }
@@ -167,9 +176,12 @@ function isWaveController(candidate) {
         && typeof candidate.checkProgress === "function";
 }
 
-function installWaveStartObserver(onWaveStart) {
+function installWaveStartObserver(onWaveStart, hooks = null) {
     let detachHook = null;
-    const stopDetector = installWaveCandidateDetector((controller) => {
+    const installDetector = hooks && typeof hooks.onWaveController === "function"
+        ? hooks.onWaveController
+        : installWaveCandidateDetector;
+    const stopDetector = installDetector((controller) => {
         if (!isWaveController(controller)) {
             return;
         }
@@ -228,9 +240,12 @@ function isWaveProgressOwner(candidate) {
         && typeof candidate.updateBar === "function";
 }
 
-function installWaveProgressObserver(onProgress) {
+function installWaveProgressObserver(onProgress, hooks = null) {
     let detachHook = null;
-    const stopDetector = installObjectPropertyCandidateDetector(["waveBar"], (candidate) => {
+    const installDetector = hooks && typeof hooks.onObjectWithProperties === "function"
+        ? hooks.onObjectWithProperties
+        : installObjectPropertyCandidateDetector;
+    const stopDetector = installDetector(["waveBar"], (candidate) => {
         if (!isWaveProgressOwner(candidate)) {
             return;
         }
@@ -760,7 +775,7 @@ function buildDerivedState(state) {
     };
 }
 
-export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null } = {}) {
+export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null, hooks = null } = {}) {
     const overlay = createAutoSkillerOverlay();
     const storedSettings = readStoredSettings();
 
@@ -1392,7 +1407,7 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
             window.__EF_AUTO_SKILLER_STATE__.status = "live";
             completeScanning();
             render();
-        });
+        }, hooks);
         uninstallWaveCallInfoObserver = installWaveCallInfoObserver((candidate) => {
             waveCallInfo = candidate;
             liveState.waveCallAvailable = true;
@@ -1400,13 +1415,13 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
             window.__EF_AUTO_SKILLER_STATE__.waveCallAvailable = true;
             window.__EF_AUTO_SKILLER_STATE__.waveCallEnabled = waveCallEnabled;
             render();
-        });
+        }, hooks);
         uninstallBattleManagerObserver = installBattleManagerObserver((candidate) => {
             battleManager = candidate;
             battleManagerStateKnown = true;
             syncNormalBattleState();
             render();
-        });
+        }, hooks);
         uninstallWaveStartObserver = installWaveStartObserver(({ wave, deltaWave }) => {
             const normalizedWave = Math.floor(sanitizeNumber(wave));
             if (Number.isFinite(normalizedWave)) {
@@ -1415,7 +1430,7 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
             if (Number.isFinite(deltaWave) && deltaWave > 0) {
                 runSpeedWaveStart(wave);
             }
-        });
+        }, hooks);
         uninstallWaveProgressObserver = installWaveProgressObserver(({ wave, current, total, percent }) => {
             const normalizedWave = Math.floor(sanitizeNumber(wave));
             if (Number.isFinite(normalizedWave) && normalizedWave > 0) {
@@ -1431,7 +1446,7 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
                 total: waveProgressTotal,
                 percent: waveProgressPercent
             };
-        });
+        }, hooks);
     } catch (error) {
         overlay.setError("Detector install failed");
         console.warn("[ef-auto-skiller] detector install failed:", error);
