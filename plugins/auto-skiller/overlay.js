@@ -1,5 +1,6 @@
 const OVERLAY_ID = "ef-auto-skiller-overlay";
 const COLLAPSED_STORAGE_KEY = "__EF_AUTO_SKILLER_COLLAPSED__";
+const SIZE_STORAGE_KEY = "__EF_AUTO_SKILLER_SIZE__";
 
 function ensureStyle() {
     if (document.getElementById(`${OVERLAY_ID}-style`)) {
@@ -20,6 +21,7 @@ function ensureStyle() {
   max-width: calc(100vw - 16px);
   min-height: 322px;
   padding: 9px 11px;
+  overflow: hidden;
   border: 1px solid rgba(255, 224, 138, 0.35);
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.72);
@@ -28,6 +30,25 @@ function ensureStyle() {
   font-size: 12px;
   line-height: 1.25;
   pointer-events: auto;
+}
+#${OVERLAY_ID} .ef-auto-skiller-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  pointer-events: auto;
+}
+#${OVERLAY_ID} .ef-auto-skiller-resize::after {
+  content: "";
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 8px;
+  height: 8px;
+  border-right: 1px solid rgba(255, 224, 138, 0.70);
+  border-bottom: 1px solid rgba(255, 224, 138, 0.70);
 }
 #${OVERLAY_ID}.ef-auto-skiller-collapsed {
   min-width: 150px;
@@ -38,6 +59,9 @@ function ensureStyle() {
   padding: 9px 11px;
 }
 #${OVERLAY_ID}.ef-auto-skiller-collapsed > :not(.ef-auto-skiller-header) {
+  display: none !important;
+}
+#${OVERLAY_ID}.ef-auto-skiller-collapsed .ef-auto-skiller-resize {
   display: none !important;
 }
 #${OVERLAY_ID}.ef-auto-skiller-collapsed .ef-auto-skiller-header {
@@ -134,6 +158,7 @@ function ensureStyle() {
   gap: 6px;
   margin-top: 8px;
   min-height: 204px;
+  overflow: hidden;
 }
 #${OVERLAY_ID} .ef-auto-skiller-row {
   display: grid;
@@ -314,6 +339,80 @@ function installDraggableWindow(node, handle, storageKey) {
     });
 }
 
+function installResizableWindow(node, handle, storageKey, { minWidth, minHeight }) {
+    if (!node || !handle) {
+        return;
+    }
+
+    function readSize() {
+        try {
+            const size = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+            if (Number.isFinite(size?.width) && Number.isFinite(size?.height)) {
+                return size;
+            }
+        } catch (error) {
+            // Ignore storage errors.
+        }
+        return null;
+    }
+
+    function writeSize(width, height) {
+        try {
+            window.localStorage.setItem(storageKey, JSON.stringify({ width, height }));
+        } catch (error) {
+            // Ignore storage errors.
+        }
+    }
+
+    function setSize(width, height, persist = false) {
+        const rect = node.getBoundingClientRect();
+        const maxWidth = Math.max(minWidth, window.innerWidth - rect.left);
+        const maxHeight = Math.max(minHeight, window.innerHeight - rect.top);
+        const nextWidth = Math.min(Math.max(minWidth, width), maxWidth);
+        const nextHeight = Math.min(Math.max(minHeight, height), maxHeight);
+        node.style.width = `${nextWidth}px`;
+        node.style.minWidth = "0";
+        node.style.height = `${nextHeight}px`;
+        node.style.minHeight = "0";
+        if (persist) {
+            writeSize(nextWidth, nextHeight);
+        }
+    }
+
+    const storedSize = readSize();
+    if (storedSize) {
+        requestAnimationFrame(() => setSize(storedSize.width, storedSize.height));
+    }
+
+    handle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = node.getBoundingClientRect();
+        const startX = event.clientX;
+        const startY = event.clientY;
+        handle.setPointerCapture?.(event.pointerId);
+
+        const onPointerMove = (moveEvent) => {
+            moveEvent.preventDefault();
+            setSize(rect.width + moveEvent.clientX - startX, rect.height + moveEvent.clientY - startY);
+        };
+        const onPointerUp = (upEvent) => {
+            handle.releasePointerCapture?.(event.pointerId);
+            window.removeEventListener("pointermove", onPointerMove);
+            window.removeEventListener("pointerup", onPointerUp);
+            const nextRect = node.getBoundingClientRect();
+            setSize(nextRect.width, nextRect.height, true);
+            upEvent.stopPropagation();
+        };
+
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", onPointerUp, { once: true });
+    });
+}
+
 function formatDuration(seconds) {
     if (!Number.isFinite(seconds) || seconds <= 0) {
         return "--";
@@ -399,9 +498,13 @@ function buildRowsHtml(state) {
     const enabledMap = state.autoSkillEnabledKeys && typeof state.autoSkillEnabledKeys === "object"
         ? state.autoSkillEnabledKeys
         : {};
+    const displaySkillSlots = activeSkillSlots.length > 0
+        ? activeSkillSlots.slice(0, 3)
+        : state.autoSkillMode === "speed"
+            ? []
+            : [null, null, null];
 
-    const skillRows = activeSkillSlots
-        .slice(0, 3)
+    const skillRows = displaySkillSlots
         .map((slot, index) => {
             const slotIndex = Number.isFinite(slot?.slot) ? Math.max(0, Math.floor(slot.slot) - 1) : index;
             const slotKey = getSlotKey(slot, index);
@@ -436,12 +539,14 @@ export function createAutoSkillerOverlay() {
   <button class="ef-auto-skiller-toggle" data-action="toggleAutoSkills" aria-pressed="false" type="button">Auto Skills: Off</button>
 </div>
 <div class="ef-auto-skiller-list"></div>
+<div class="ef-auto-skiller-resize" aria-hidden="true"></div>
 `;
 
     const status = node.querySelector(".ef-auto-skiller-status");
     const header = node.querySelector(".ef-auto-skiller-header");
     const toggleButton = node.querySelector('[data-action="toggleAutoSkills"]');
     const collapseButton = node.querySelector('[data-action="toggleCollapse"]');
+    const resizeHandle = node.querySelector(".ef-auto-skiller-resize");
     const modeButtons = Array.from(node.querySelectorAll("[data-mode]"));
     const list = node.querySelector(".ef-auto-skiller-list");
     let collapsed = false;
@@ -449,6 +554,7 @@ export function createAutoSkillerOverlay() {
 
     document.body.appendChild(node);
     installDraggableWindow(node, header, "__EF_AUTO_SKILLER_POSITION__");
+    installResizableWindow(node, resizeHandle, SIZE_STORAGE_KEY, { minWidth: 230, minHeight: 220 });
 
     function setCollapsed(nextCollapsed) {
         collapsed = !!nextCollapsed;
@@ -482,6 +588,9 @@ export function createAutoSkillerOverlay() {
         event.preventDefault();
         setCollapsed(!collapsed);
     });
+    if (list) {
+        list.innerHTML = buildRowsHtml({ autoSkillMode: "push" });
+    }
     setCollapsed(readBooleanPreference(COLLAPSED_STORAGE_KEY, false));
 
     return {

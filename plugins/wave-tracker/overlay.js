@@ -1,6 +1,7 @@
 const OVERLAY_ID = "ef-wave-overlay";
 const MEDAL_BUFF_STORAGE_KEY = "__EF_WAVE_TRACKER_MEDAL_BUFF_PERCENT__";
 const MINIMIZED_STORAGE_KEY = "__EF_WAVE_TRACKER_MINIMIZED__";
+const SIZE_STORAGE_KEY = "__EF_WAVE_TRACKER_SIZE__";
 
 function formatMinSec(totalSeconds) {
     if (!Number.isFinite(totalSeconds)) {
@@ -26,6 +27,7 @@ function ensureStyle() {
   box-sizing: border-box;
   min-width: 220px;
   padding: 9px 11px;
+  overflow: hidden;
   border-radius: 8px;
   border: 1px solid rgba(255, 224, 138, 0.35);
   background: rgba(0, 0, 0, 0.72);
@@ -35,6 +37,25 @@ function ensureStyle() {
   line-height: 1.25;
   pointer-events: none;
 }
+#${OVERLAY_ID} .ef-wave-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  pointer-events: auto;
+}
+#${OVERLAY_ID} .ef-wave-resize::after {
+  content: "";
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 8px;
+  height: 8px;
+  border-right: 1px solid rgba(255, 224, 138, 0.70);
+  border-bottom: 1px solid rgba(255, 224, 138, 0.70);
+}
 #${OVERLAY_ID}.ef-wave-minimized {
   min-width: 170px;
   width: 170px;
@@ -42,6 +63,9 @@ function ensureStyle() {
   padding: 9px 11px;
 }
 #${OVERLAY_ID}.ef-wave-minimized > :not(.ef-wave-header) {
+  display: none !important;
+}
+#${OVERLAY_ID}.ef-wave-minimized .ef-wave-resize {
   display: none !important;
 }
 #${OVERLAY_ID}.ef-wave-minimized .ef-wave-header {
@@ -143,6 +167,7 @@ function ensureStyle() {
   grid-template-columns: 1fr;
   row-gap: 6px;
   margin-top: 6px;
+  overflow: hidden;
 }
 #${OVERLAY_ID} .ef-wave-medal-buff {
   display: flex;
@@ -349,6 +374,80 @@ function installDraggableWindow(node, handle, storageKey) {
     });
 }
 
+function installResizableWindow(node, handle, storageKey, { minWidth, minHeight }) {
+    if (!node || !handle) {
+        return;
+    }
+
+    function readSize() {
+        try {
+            const size = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+            if (Number.isFinite(size?.width) && Number.isFinite(size?.height)) {
+                return size;
+            }
+        } catch (error) {
+            // Ignore storage errors.
+        }
+        return null;
+    }
+
+    function writeSize(width, height) {
+        try {
+            window.localStorage.setItem(storageKey, JSON.stringify({ width, height }));
+        } catch (error) {
+            // Ignore storage errors.
+        }
+    }
+
+    function setSize(width, height, persist = false) {
+        const rect = node.getBoundingClientRect();
+        const maxWidth = Math.max(minWidth, window.innerWidth - rect.left);
+        const maxHeight = Math.max(minHeight, window.innerHeight - rect.top);
+        const nextWidth = Math.min(Math.max(minWidth, width), maxWidth);
+        const nextHeight = Math.min(Math.max(minHeight, height), maxHeight);
+        node.style.width = `${nextWidth}px`;
+        node.style.minWidth = "0";
+        node.style.height = `${nextHeight}px`;
+        node.style.minHeight = "0";
+        if (persist) {
+            writeSize(nextWidth, nextHeight);
+        }
+    }
+
+    const storedSize = readSize();
+    if (storedSize) {
+        requestAnimationFrame(() => setSize(storedSize.width, storedSize.height));
+    }
+
+    handle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = node.getBoundingClientRect();
+        const startX = event.clientX;
+        const startY = event.clientY;
+        handle.setPointerCapture?.(event.pointerId);
+
+        const onPointerMove = (moveEvent) => {
+            moveEvent.preventDefault();
+            setSize(rect.width + moveEvent.clientX - startX, rect.height + moveEvent.clientY - startY);
+        };
+        const onPointerUp = (upEvent) => {
+            handle.releasePointerCapture?.(event.pointerId);
+            window.removeEventListener("pointermove", onPointerMove);
+            window.removeEventListener("pointerup", onPointerUp);
+            const nextRect = node.getBoundingClientRect();
+            setSize(nextRect.width, nextRect.height, true);
+            upEvent.stopPropagation();
+        };
+
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", onPointerUp, { once: true });
+    });
+}
+
 export function createWaveOverlay() {
     ensureStyle();
     const node = document.createElement("div");
@@ -370,12 +469,14 @@ export function createWaveOverlay() {
   <input class="ef-wave-medal-buff-input" type="text" inputmode="numeric" pattern="[0-9]*" value="0">
   <button class="ef-wave-medal-buff-button" type="button">Apply</button>
 </div>
+<div class="ef-wave-resize" aria-hidden="true"></div>
 `;
     const topSeparator = node.querySelector(".ef-wave-separator");
     const header = node.querySelector(".ef-wave-header");
     const status = node.querySelector(".ef-wave-status");
     const body = node.querySelector(".ef-wave-body");
     const toggleButton = node.querySelector(".ef-wave-toggle");
+    const resizeHandle = node.querySelector(".ef-wave-resize");
     const bottomSeparator = node.querySelector(".ef-wave-separator.bottom");
     const medalsSubtitle = node.querySelector(".ef-wave-subtitle");
     const medalsSeparator = node.querySelector(".ef-wave-separator.medals");
@@ -475,6 +576,7 @@ export function createWaveOverlay() {
     renderStatus("Status", "scanning");
     document.body.appendChild(node);
     installDraggableWindow(node, header, "__EF_WAVE_TRACKER_POSITION__");
+    installResizableWindow(node, resizeHandle, SIZE_STORAGE_KEY, { minWidth: 220, minHeight: 180 });
 
     return {
         setScanning() {
