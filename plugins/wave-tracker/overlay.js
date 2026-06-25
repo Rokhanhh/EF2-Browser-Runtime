@@ -492,6 +492,9 @@ export function createWaveOverlay() {
     const medalBuffButton = node.querySelector(".ef-wave-medal-buff-button");
     let medalBuffPercent = readStoredMedalBuffPercent();
     let minimized = readBooleanPreference(MINIMIZED_STORAGE_KEY, false);
+    let lastMetricsHtml = "";
+    let lastStatusHtml = "";
+    let lastMedalsHtml = "";
     if (medalBuffInput) {
         medalBuffInput.value = String(medalBuffPercent);
     }
@@ -525,21 +528,33 @@ export function createWaveOverlay() {
     }
 
     function renderMetrics(metrics) {
-        body.innerHTML = metrics.map(({ label, value }) => (
+        const nextHtml = metrics.map(({ label, value }) => (
             `<div class="ef-wave-metric"><div class="ef-wave-label">${label}</div><div class="ef-wave-value">${value}</div></div>`
         )).join("");
+        if (nextHtml !== lastMetricsHtml) {
+            lastMetricsHtml = nextHtml;
+            body.innerHTML = nextHtml;
+        }
     }
 
     function renderStatus(label, value) {
-        status.innerHTML = label
+        const nextHtml = label
             ? `<span class="ef-wave-label">${label}:</span><span class="ef-wave-value">${value}</span>`
             : "";
+        if (nextHtml !== lastStatusHtml) {
+            lastStatusHtml = nextHtml;
+            status.innerHTML = nextHtml;
+        }
     }
 
     function renderMedalsMetrics(metrics) {
-        medalsBody.innerHTML = metrics.map(({ label, value, valueClass = "" }) => (
+        const nextHtml = metrics.map(({ label, value, valueClass = "" }) => (
             `<div class="ef-wave-metric"><div class="ef-wave-label">${label}</div><div class="ef-wave-value ${valueClass}">${value}</div></div>`
         )).join("");
+        if (nextHtml !== lastMedalsHtml) {
+            lastMedalsHtml = nextHtml;
+            medalsBody.innerHTML = nextHtml;
+        }
     }
 
     function setStatusVisible(visible) {

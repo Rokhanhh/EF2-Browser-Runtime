@@ -92,6 +92,14 @@ async function notify(type, event) {
     }
 }
 
+export function hasMatchingListeners(type, event) {
+    const targetListeners = listeners[type];
+    if (!targetListeners || targetListeners.size === 0) {
+        return false;
+    }
+    return Array.from(targetListeners).some((subscription) => matchesOptions(event, subscription.options));
+}
+
 function deepFreeze(value, seen = new Set()) {
     if (!value || typeof value !== "object" || seen.has(value)) {
         return value;
@@ -166,6 +174,9 @@ export async function notifyRequest(event) {
 
 export async function notifyResponse(event) {
     await notify("response", event);
+}
+
+export async function notifyJsonResponse(event) {
     await notify("jsonResponse", event);
 }
 

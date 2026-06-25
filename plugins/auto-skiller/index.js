@@ -3,8 +3,8 @@ import { installWaveCandidateDetector } from "/endlessfrontier2/bootstrap/runtim
 import { createAutoSkillerOverlay } from "./overlay.js";
 
 const ACTIVE_SKILL_FPS = 60;
-const RENDER_INTERVAL_MS = 100;
-const AUTO_SKILL_SCAN_INTERVAL_MS = 50;
+const RENDER_INTERVAL_MS = 150;
+const AUTO_SKILL_SCAN_INTERVAL_MS = 75;
 const AUTO_SKILL_MODE_PUSH = "push";
 const AUTO_SKILL_MODE_SPEED = "speed";
 const AUTO_SKILL_BASE_DELAY_MIN_MS = 100;
@@ -819,6 +819,7 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
     let autoSkillBoostWindowStartAt = performance.now();
     let autoSkillBoostTargetIndex = 0;
     let autoSkillBoostTargetsMs = [];
+    let lastRenderedStateSignature = "";
 
     if (storedSettings.autoSkillEnabledKeys && typeof storedSettings.autoSkillEnabledKeys === "object") {
         for (const [slotKey, enabled] of Object.entries(storedSettings.autoSkillEnabledKeys)) {
@@ -952,7 +953,17 @@ export function attachAutoSkiller({ scanWarnMs = 15000, scanHardTimeoutMs = null
             ? `${Math.round(waveProgressPercent)}%`
             : "-";
         liveState.lastSpeedWave = lastSpeedWave;
-        overlay.setState(buildDerivedState(liveState));
+        const derivedState = buildDerivedState(liveState);
+        const stateSignature = JSON.stringify(derivedState);
+        if (stateSignature === lastRenderedStateSignature) {
+            return;
+        }
+        lastRenderedStateSignature = stateSignature;
+        window.requestAnimationFrame(() => {
+            if (attached && stateSignature === lastRenderedStateSignature) {
+                overlay.setState(derivedState);
+            }
+        });
     }
 
     function completeScanning() {

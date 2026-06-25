@@ -1,6 +1,8 @@
 import { PROXY_PREFIX, REMOTE_ORIGIN, REMOTE_WS_ORIGIN, WS_PROXY_PREFIX } from "./config.js";
 import {
     createBodyReaders,
+    hasMatchingListeners,
+    notifyJsonResponse,
     notifyRequest,
     notifyResponse,
     notifyWebSocketCreate,
@@ -149,20 +151,33 @@ export function installNetworkProxy() {
         });
 
         const response = await nativeFetch(proxied, init);
-        const responseClone = response.clone();
-        const readers = createBodyReaders({ response: responseClone });
-
-        notifyResponse({
+        const baseResponseEvent = {
             type: "fetch",
             method,
             url: originalUrl,
             proxiedUrl: typeof proxied === "string" ? proxied : extractUrl(proxied),
             status: response.status,
             ok: response.ok,
-            headers: snapshotHeaders(response.headers),
-            readText: readers.readText,
-            readJson: readers.readJson
-        });
+            headers: snapshotHeaders(response.headers)
+        };
+        const needsResponseEvent = hasMatchingListeners("response", baseResponseEvent);
+        const needsJsonResponseEvent = hasMatchingListeners("jsonResponse", baseResponseEvent);
+
+        if (needsResponseEvent || needsJsonResponseEvent) {
+            const responseClone = response.clone();
+            const readers = createBodyReaders({ response: responseClone });
+            const responseEvent = {
+                ...baseResponseEvent,
+                readText: readers.readText,
+                readJson: readers.readJson
+            };
+            if (needsResponseEvent) {
+                notifyResponse(responseEvent);
+            }
+            if (needsJsonResponseEvent) {
+                notifyJsonResponse(responseEvent);
+            }
+        }
 
         return response;
     };
@@ -222,23 +237,37 @@ export function installNetworkProxy() {
                 return;
             }
             let text = "";
+            const baseResponseEvent = {
+                type: "xhr",
+                method: this.__efOriginalMethod || "GET",
+                url: this.__efOriginalUrl || "",
+                proxiedUrl: this.__efProxiedUrl || "",
+                status: this.status,
+                ok: this.status >= 200 && this.status < 300
+            };
+            const needsResponseEvent = hasMatchingListeners("response", baseResponseEvent);
+            const needsJsonResponseEvent = hasMatchingListeners("jsonResponse", baseResponseEvent);
+            if (!needsResponseEvent && !needsJsonResponseEvent) {
+                return;
+            }
             try {
                 text = typeof this.responseText === "string" ? this.responseText : "";
             } catch (error) {
                 text = "";
             }
             const readers = createBodyReaders({ text });
-            notifyResponse({
-                type: "xhr",
-                method: this.__efOriginalMethod || "GET",
-                url: this.__efOriginalUrl || "",
-                proxiedUrl: this.__efProxiedUrl || "",
-                status: this.status,
-                ok: this.status >= 200 && this.status < 300,
+            const responseEvent = {
+                ...baseResponseEvent,
                 responseText: text,
                 readText: readers.readText,
                 readJson: readers.readJson
-            });
+            };
+            if (needsResponseEvent) {
+                notifyResponse(responseEvent);
+            }
+            if (needsJsonResponseEvent) {
+                notifyJsonResponse(responseEvent);
+            }
         }, { once: true });
 
         return nativeSend.call(this, body);

@@ -557,6 +557,7 @@ export function createAutoSkillerOverlay() {
     const list = node.querySelector(".ef-auto-skiller-list");
     let collapsed = false;
     let listInteractionHoldUntil = 0;
+    let lastListHtml = "";
 
     document.body.appendChild(node);
     installDraggableWindow(node, header, "__EF_AUTO_SKILLER_POSITION__");
@@ -603,7 +604,8 @@ export function createAutoSkillerOverlay() {
         setCollapsed(!collapsed);
     });
     if (list) {
-        list.innerHTML = buildRowsHtml({ autoSkillMode: "push" });
+        lastListHtml = buildRowsHtml({ autoSkillMode: "push" });
+        list.innerHTML = lastListHtml;
     }
     setCollapsed(readBooleanPreference(COLLAPSED_STORAGE_KEY, false));
 
@@ -628,7 +630,11 @@ export function createAutoSkillerOverlay() {
                 : null;
             const focusedEditable = focusedElement?.matches?.("[data-speed-wave-end-digit], [data-speed-skill-percent]") === true;
             if (list && !focusedEditable && (performance.now() >= listInteractionHoldUntil || list.children.length === 0)) {
-                list.innerHTML = buildRowsHtml(state);
+                const nextListHtml = buildRowsHtml(state);
+                if (nextListHtml !== lastListHtml) {
+                    lastListHtml = nextListHtml;
+                    list.innerHTML = nextListHtml;
+                }
             }
         },
         setError(message) {
