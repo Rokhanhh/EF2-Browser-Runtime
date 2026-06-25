@@ -31,6 +31,7 @@ async function loadLocalPlugins(runtime) {
             plugins.push({
                 ...plugin,
                 id: plugin.id || descriptor.id,
+                name: plugin.name || descriptor.name || plugin.id || descriptor.id,
                 handleKey: plugin.handleKey || descriptor.handleKey || null
             });
         } catch (error) {
@@ -44,6 +45,7 @@ export async function installRuntimePlugins(runtime) {
     const handles = {};
     const localPlugins = await loadLocalPlugins(runtime);
     const allPlugins = [...runtimePlugins, ...localPlugins];
+    const installedPlugins = [];
 
     for (const plugin of allPlugins) {
         if (!plugin || !plugin.id || typeof plugin.setup !== "function") {
@@ -51,6 +53,10 @@ export async function installRuntimePlugins(runtime) {
         }
         if (plugin.handleKey && window[plugin.handleKey]) {
             handles[plugin.id] = window[plugin.handleKey];
+            installedPlugins.push({
+                id: plugin.id,
+                name: plugin.name || plugin.id
+            });
             continue;
         }
 
@@ -60,10 +66,15 @@ export async function installRuntimePlugins(runtime) {
             if (plugin.handleKey) {
                 window[plugin.handleKey] = handles[plugin.id];
             }
+            installedPlugins.push({
+                id: plugin.id,
+                name: plugin.name || plugin.id
+            });
         } catch (error) {
             runtime.logger.warn(plugin.id, "install failed", error);
         }
     }
 
+    handles.__plugins = installedPlugins;
     return handles;
 }

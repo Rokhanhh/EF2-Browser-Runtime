@@ -2,7 +2,7 @@ import { ensureBrowserGlobals } from "./globals.js";
 import { callGameStart, loadCssFile, loadManifest, loadModule } from "./loader.js";
 import { createPluginRuntime } from "./pluginRuntime.js";
 import { installRuntimePlugins } from "./plugins.js";
-import { setLoaderState, setStatus, showError } from "./ui.js";
+import { installRuntimeMenu, setLoaderState, setStatus, showError } from "./ui.js";
 
 async function waitForSplashFirstPaint() {
     // Let the splash render before loading the heavy game module.
@@ -46,7 +46,8 @@ async function bootstrapRuntime() {
         config: window.__EF_RUNTIME_CONFIG__ || {}
     });
     window.__EF_PLUGIN_RUNTIME__ = runtime;
-    await installRuntimePlugins(runtime);
+    const pluginHandles = await installRuntimePlugins(runtime);
+    installRuntimeMenu(pluginHandles.__plugins || []);
 
     setLoaderState("loading-module");
     setStatus("Loading game module...");

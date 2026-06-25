@@ -1,5 +1,6 @@
 const OVERLAY_ID = "ef-wave-overlay";
 const MEDAL_BUFF_STORAGE_KEY = "__EF_WAVE_TRACKER_MEDAL_BUFF_PERCENT__";
+const MINIMIZED_STORAGE_KEY = "__EF_WAVE_TRACKER_MINIMIZED__";
 
 function formatMinSec(totalSeconds) {
     if (!Number.isFinite(totalSeconds)) {
@@ -35,15 +36,12 @@ function ensureStyle() {
   pointer-events: none;
 }
 #${OVERLAY_ID}.ef-wave-minimized {
-  min-width: 0;
-  width: 38px;
+  min-width: 170px;
+  width: 170px;
   height: 38px;
   padding: 9px 11px;
 }
 #${OVERLAY_ID}.ef-wave-minimized > :not(.ef-wave-header) {
-  display: none !important;
-}
-#${OVERLAY_ID}.ef-wave-minimized .ef-wave-title {
   display: none !important;
 }
 #${OVERLAY_ID}.ef-wave-minimized .ef-wave-header {
@@ -51,23 +49,25 @@ function ensureStyle() {
 }
 #${OVERLAY_ID}.ef-wave-minimized .ef-wave-toggle {
   top: -2px;
-  right: -4px;
+  left: -4px;
 }
 #${OVERLAY_ID} .ef-wave-header {
   position: relative;
   min-height: 20px;
+  pointer-events: auto;
 }
 #${OVERLAY_ID} .ef-wave-title {
   font-weight: 700;
   font-size: 16px;
   letter-spacing: 0.3px;
-  margin: 0 24px 6px 0;
+  margin: 0 0 6px 24px;
   text-align: center;
+  white-space: nowrap;
 }
 #${OVERLAY_ID} .ef-wave-toggle {
   position: absolute;
   top: -2px;
-  right: -4px;
+  left: -4px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -251,6 +251,104 @@ function readStoredMedalBuffPercent() {
     }
 }
 
+function readBooleanPreference(key, fallback = false) {
+    try {
+        const value = window.localStorage.getItem(key);
+        return value === null ? fallback : value === "true";
+    } catch (error) {
+        return fallback;
+    }
+}
+
+function writeBooleanPreference(key, value) {
+    try {
+        window.localStorage.setItem(key, value ? "true" : "false");
+    } catch (error) {
+        // Ignore storage errors.
+    }
+}
+
+function installDraggableWindow(node, handle, storageKey) {
+    if (!node || !handle) {
+        return;
+    }
+
+    function readPosition() {
+        try {
+            const position = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+            if (Number.isFinite(position?.left) && Number.isFinite(position?.top)) {
+                return position;
+            }
+        } catch (error) {
+            // Ignore storage errors.
+        }
+        return null;
+    }
+
+    function writePosition(left, top) {
+        try {
+            window.localStorage.setItem(storageKey, JSON.stringify({ left, top }));
+        } catch (error) {
+            // Ignore storage errors.
+        }
+    }
+
+    function clampPosition(left, top) {
+        const rect = node.getBoundingClientRect();
+        const maxLeft = Math.max(0, window.innerWidth - rect.width);
+        const maxTop = Math.max(0, window.innerHeight - rect.height);
+        return {
+            left: Math.min(Math.max(0, left), maxLeft),
+            top: Math.min(Math.max(0, top), maxTop)
+        };
+    }
+
+    function setPosition(left, top, persist = false) {
+        const next = clampPosition(left, top);
+        node.style.left = `${next.left}px`;
+        node.style.top = `${next.top}px`;
+        node.style.right = "auto";
+        node.style.bottom = "auto";
+        if (persist) {
+            writePosition(next.left, next.top);
+        }
+    }
+
+    const storedPosition = readPosition();
+    if (storedPosition) {
+        requestAnimationFrame(() => setPosition(storedPosition.left, storedPosition.top));
+    }
+
+    handle.style.cursor = "move";
+    handle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || event.target?.closest?.("button, input, select, textarea, label, a")) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = node.getBoundingClientRect();
+        const offsetX = event.clientX - rect.left;
+        const offsetY = event.clientY - rect.top;
+        handle.setPointerCapture?.(event.pointerId);
+
+        const onPointerMove = (moveEvent) => {
+            moveEvent.preventDefault();
+            setPosition(moveEvent.clientX - offsetX, moveEvent.clientY - offsetY);
+        };
+        const onPointerUp = (upEvent) => {
+            handle.releasePointerCapture?.(event.pointerId);
+            window.removeEventListener("pointermove", onPointerMove);
+            window.removeEventListener("pointerup", onPointerUp);
+            const nextRect = node.getBoundingClientRect();
+            setPosition(nextRect.left, nextRect.top, true);
+            upEvent.stopPropagation();
+        };
+
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", onPointerUp, { once: true });
+    });
+}
+
 export function createWaveOverlay() {
     ensureStyle();
     const node = document.createElement("div");
@@ -274,6 +372,7 @@ export function createWaveOverlay() {
 </div>
 `;
     const topSeparator = node.querySelector(".ef-wave-separator");
+    const header = node.querySelector(".ef-wave-header");
     const status = node.querySelector(".ef-wave-status");
     const body = node.querySelector(".ef-wave-body");
     const toggleButton = node.querySelector(".ef-wave-toggle");
@@ -285,7 +384,7 @@ export function createWaveOverlay() {
     const medalBuffInput = node.querySelector(".ef-wave-medal-buff-input");
     const medalBuffButton = node.querySelector(".ef-wave-medal-buff-button");
     let medalBuffPercent = readStoredMedalBuffPercent();
-    let minimized = false;
+    let minimized = readBooleanPreference(MINIMIZED_STORAGE_KEY, false);
     if (medalBuffInput) {
         medalBuffInput.value = String(medalBuffPercent);
     }
@@ -307,6 +406,7 @@ export function createWaveOverlay() {
             toggleButton.setAttribute("aria-label", minimized ? "Expand Wave Tracker" : "Minimize Wave Tracker");
             toggleButton.title = minimized ? "Expand Wave Tracker" : "Minimize Wave Tracker";
         }
+        writeBooleanPreference(MINIMIZED_STORAGE_KEY, minimized);
     }
 
     function renderMetrics(metrics) {
@@ -374,6 +474,7 @@ export function createWaveOverlay() {
     setStatusVisible(true);
     renderStatus("Status", "scanning");
     document.body.appendChild(node);
+    installDraggableWindow(node, header, "__EF_WAVE_TRACKER_POSITION__");
 
     return {
         setScanning() {

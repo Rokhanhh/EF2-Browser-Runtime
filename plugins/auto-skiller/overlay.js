@@ -1,4 +1,5 @@
 const OVERLAY_ID = "ef-auto-skiller-overlay";
+const COLLAPSED_STORAGE_KEY = "__EF_AUTO_SKILLER_COLLAPSED__";
 
 function ensureStyle() {
     if (document.getElementById(`${OVERLAY_ID}-style`)) {
@@ -29,17 +30,14 @@ function ensureStyle() {
   pointer-events: auto;
 }
 #${OVERLAY_ID}.ef-auto-skiller-collapsed {
-  min-width: 0;
-  width: 38px;
+  min-width: 150px;
+  width: 150px;
   min-height: 0;
   height: 38px;
   overflow: hidden;
   padding: 9px 11px;
 }
 #${OVERLAY_ID}.ef-auto-skiller-collapsed > :not(.ef-auto-skiller-header) {
-  display: none !important;
-}
-#${OVERLAY_ID}.ef-auto-skiller-collapsed .ef-auto-skiller-title {
   display: none !important;
 }
 #${OVERLAY_ID}.ef-auto-skiller-collapsed .ef-auto-skiller-header {
@@ -218,6 +216,104 @@ function escapeHtml(value) {
         .replace(/"/g, "&quot;");
 }
 
+function readBooleanPreference(key, fallback = false) {
+    try {
+        const value = window.localStorage.getItem(key);
+        return value === null ? fallback : value === "true";
+    } catch (error) {
+        return fallback;
+    }
+}
+
+function writeBooleanPreference(key, value) {
+    try {
+        window.localStorage.setItem(key, value ? "true" : "false");
+    } catch (error) {
+        // Ignore storage errors.
+    }
+}
+
+function installDraggableWindow(node, handle, storageKey) {
+    if (!node || !handle) {
+        return;
+    }
+
+    function readPosition() {
+        try {
+            const position = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+            if (Number.isFinite(position?.left) && Number.isFinite(position?.top)) {
+                return position;
+            }
+        } catch (error) {
+            // Ignore storage errors.
+        }
+        return null;
+    }
+
+    function writePosition(left, top) {
+        try {
+            window.localStorage.setItem(storageKey, JSON.stringify({ left, top }));
+        } catch (error) {
+            // Ignore storage errors.
+        }
+    }
+
+    function clampPosition(left, top) {
+        const rect = node.getBoundingClientRect();
+        const maxLeft = Math.max(0, window.innerWidth - rect.width);
+        const maxTop = Math.max(0, window.innerHeight - rect.height);
+        return {
+            left: Math.min(Math.max(0, left), maxLeft),
+            top: Math.min(Math.max(0, top), maxTop)
+        };
+    }
+
+    function setPosition(left, top, persist = false) {
+        const next = clampPosition(left, top);
+        node.style.left = `${next.left}px`;
+        node.style.top = `${next.top}px`;
+        node.style.right = "auto";
+        node.style.bottom = "auto";
+        if (persist) {
+            writePosition(next.left, next.top);
+        }
+    }
+
+    const storedPosition = readPosition();
+    if (storedPosition) {
+        requestAnimationFrame(() => setPosition(storedPosition.left, storedPosition.top));
+    }
+
+    handle.style.cursor = "move";
+    handle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || event.target?.closest?.("button, input, select, textarea, label, a")) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = node.getBoundingClientRect();
+        const offsetX = event.clientX - rect.left;
+        const offsetY = event.clientY - rect.top;
+        handle.setPointerCapture?.(event.pointerId);
+
+        const onPointerMove = (moveEvent) => {
+            moveEvent.preventDefault();
+            setPosition(moveEvent.clientX - offsetX, moveEvent.clientY - offsetY);
+        };
+        const onPointerUp = (upEvent) => {
+            handle.releasePointerCapture?.(event.pointerId);
+            window.removeEventListener("pointermove", onPointerMove);
+            window.removeEventListener("pointerup", onPointerUp);
+            const nextRect = node.getBoundingClientRect();
+            setPosition(nextRect.left, nextRect.top, true);
+            upEvent.stopPropagation();
+        };
+
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", onPointerUp, { once: true });
+    });
+}
+
 function formatDuration(seconds) {
     if (!Number.isFinite(seconds) || seconds <= 0) {
         return "--";
@@ -343,6 +439,7 @@ export function createAutoSkillerOverlay() {
 `;
 
     const status = node.querySelector(".ef-auto-skiller-status");
+    const header = node.querySelector(".ef-auto-skiller-header");
     const toggleButton = node.querySelector('[data-action="toggleAutoSkills"]');
     const collapseButton = node.querySelector('[data-action="toggleCollapse"]');
     const modeButtons = Array.from(node.querySelectorAll("[data-mode]"));
@@ -351,6 +448,7 @@ export function createAutoSkillerOverlay() {
     let listInteractionHoldUntil = 0;
 
     document.body.appendChild(node);
+    installDraggableWindow(node, header, "__EF_AUTO_SKILLER_POSITION__");
 
     function setCollapsed(nextCollapsed) {
         collapsed = !!nextCollapsed;
@@ -360,6 +458,7 @@ export function createAutoSkillerOverlay() {
             collapseButton.setAttribute("aria-pressed", collapsed ? "true" : "false");
             collapseButton.setAttribute("aria-label", collapsed ? "Expand Auto Skills" : "Minimize Auto Skills");
         }
+        writeBooleanPreference(COLLAPSED_STORAGE_KEY, collapsed);
     }
 
     function stopOverlayEvent(event) {
@@ -383,7 +482,7 @@ export function createAutoSkillerOverlay() {
         event.preventDefault();
         setCollapsed(!collapsed);
     });
-    setCollapsed(false);
+    setCollapsed(readBooleanPreference(COLLAPSED_STORAGE_KEY, false));
 
     return {
         setScanning(message = "Scanning...") {
