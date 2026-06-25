@@ -141,7 +141,7 @@ export function installNetworkProxy() {
         const proxied = proxiedUrl(input);
         const method = extractMethod(input, init);
 
-        await notifyRequest({
+        notifyRequest({
             type: "fetch",
             method,
             url: originalUrl,
@@ -152,7 +152,7 @@ export function installNetworkProxy() {
         const responseClone = response.clone();
         const readers = createBodyReaders({ response: responseClone });
 
-        await notifyResponse({
+        notifyResponse({
             type: "fetch",
             method,
             url: originalUrl,

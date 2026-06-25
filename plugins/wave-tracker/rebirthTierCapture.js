@@ -205,11 +205,11 @@ function storeRebirthMedalTier({ payload, sourceUrl }) {
 export function installRebirthTierCapture(runtime) {
     restorePersistedStore();
 
-    return runtime.network.onJsonResponse(async (event) => {
-        if (!isGetBatchUrl(event.url)) {
-            return;
-        }
+    return runtime.network.onJsonResponse({ urlIncludes: "getbatch" }, async (event) => {
         try {
+            if (!isGetBatchUrl(event.url)) {
+                return;
+            }
             const payload = await event.readJson();
             storeRebirthMedalTier({ payload, sourceUrl: event.url });
         } catch (error) {

@@ -10,11 +10,7 @@ export default {
         const installedCount = runtime.storage.get("example-plugin", "installedCount", 0) + 1;
         runtime.storage.set("example-plugin", "installedCount", installedCount);
 
-        const unsubscribeNetwork = runtime.network.onJsonResponse(async (event) => {
-            if (!event.url.toLowerCase().includes("getbatch")) {
-                return;
-            }
-
+        const unsubscribeNetwork = runtime.network.onJsonResponse({ urlIncludes: "getbatch" }, async (event) => {
             const payload = await event.readJson();
             runtime.logger.info("example-plugin", "observed getbatch", {
                 version: payload?.version || "unknown"
