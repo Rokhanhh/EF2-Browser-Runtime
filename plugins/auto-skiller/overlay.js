@@ -383,6 +383,12 @@ function installResizableWindow(node, handle, storageKey, { minWidth, minHeight 
     if (storedSize) {
         requestAnimationFrame(() => setSize(storedSize.width, storedSize.height));
     }
+    node.__efApplyStoredSize = () => {
+        const size = readSize();
+        if (size) {
+            setSize(size.width, size.height);
+        }
+    };
 
     handle.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) {
@@ -559,6 +565,14 @@ export function createAutoSkillerOverlay() {
     function setCollapsed(nextCollapsed) {
         collapsed = !!nextCollapsed;
         node.classList.toggle("ef-auto-skiller-collapsed", collapsed);
+        if (collapsed) {
+            node.style.width = "";
+            node.style.height = "";
+            node.style.minWidth = "";
+            node.style.minHeight = "";
+        } else {
+            node.__efApplyStoredSize?.();
+        }
         if (collapseButton) {
             collapseButton.textContent = collapsed ? "+" : "-";
             collapseButton.setAttribute("aria-pressed", collapsed ? "true" : "false");
