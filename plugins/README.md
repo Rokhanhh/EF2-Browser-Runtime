@@ -205,7 +205,7 @@ export default {
 
 ## Current Plugins
 
-- `plugins/wave-tracker`: tracks waves, metrics, medal projections, and captures rebirth medal tier data from observed JSON responses.
+- `plugins/wave-tracker`: tracks waves, metrics, medal projections, emits `wave:sample`, and captures rebirth medal tier data from observed JSON responses.
 - `plugins/auto-skiller`: observes game objects and automates configured skill actions.
 - `plugins/example-plugin`: disabled sample plugin showing the minimum local plugin structure.
 

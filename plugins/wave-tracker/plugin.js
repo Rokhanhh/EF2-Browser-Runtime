@@ -10,7 +10,8 @@ export default {
         const handle = attachWaveTracker({
             scanWarnMs: 15000,
             scanHardTimeoutMs: null,
-            hooks: runtime.hooks
+            hooks: runtime.hooks,
+            events: runtime.events
         });
 
         return {

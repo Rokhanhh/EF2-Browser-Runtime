@@ -259,7 +259,7 @@ function getGameMpmMinute(rebirthTimeSec) {
         : NaN;
 }
 
-export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null, hooks = null } = {}) {
+export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null, hooks = null, events = null } = {}) {
     const overlay = createWaveOverlay();
     const metrics = createWaveMetrics();
 
@@ -350,6 +350,12 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
             wave: Number.isFinite(medalsAtCurrentWave?.wave) ? Math.floor(medalsAtCurrentWave.wave) : Math.floor(wave),
             minute: getGameMpmMinute(rebirthTimeSec)
         };
+    }
+
+    function emitWaveSample(sample) {
+        if (events && typeof events.emit === "function") {
+            events.emit("wave:sample", sample);
+        }
     }
 
     function updateProfileLastReviveTime(value) {
@@ -472,7 +478,9 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
                     wpmReady: wpmState.ready
                 });
                 updateBestMpmState(medalMpmState, medalsAtCurrentWave, wave, rebirthTimeSec);
-                overlay.setBattle({
+                const sample = {
+                    at: now,
+                    wallTimeMs: nowWallMs,
                     wave,
                     maxWave,
                     rebirthTimeSec,
@@ -487,9 +495,12 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
                     medalsAtCurrentWave,
                     medalMpmState,
                     bestMpmState,
+                    waveBlockEstimateState,
                     wpm: wpmState.wpm,
                     wpmReady: wpmState.ready
-                });
+                };
+                emitWaveSample(sample);
+                overlay.setBattle(sample);
             }
 
             return result;
@@ -524,7 +535,9 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
         });
         updateBestMpmState(initialMedalMpmState, medalsAtCurrentWave, initialDisplayWave, initialRebirthTimeSec);
         metrics.addSample(initialDisplayWave);
-        overlay.setBattle({
+        const initialSample = {
+            at: trackedWaveStartedAt,
+            wallTimeMs: Date.now(),
             wave: initialDisplayWave,
             maxWave,
             rebirthTimeSec: initialRebirthTimeSec,
@@ -539,9 +552,19 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
             medalsAtCurrentWave,
             medalMpmState: initialMedalMpmState,
             bestMpmState,
+            waveBlockEstimateState: {
+                ready: false,
+                estimatedWaveTimeSec: NaN,
+                lastBlockSec: NaN,
+                avg3BlockSec: NaN,
+                avg10BlockSec: NaN,
+                blockCount: 0
+            },
             wpm: 0,
             wpmReady: false
-        });
+        };
+        emitWaveSample(initialSample);
+        overlay.setBattle(initialSample);
 
         window.__EF_WAVE_TRACKER_STATE__.status = "hooked";
         window.__EF_WAVE_TRACKER_STATE__.hookedAtMs = Math.round(performance.now() - startAt);
