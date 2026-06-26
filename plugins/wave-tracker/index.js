@@ -481,6 +481,7 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
                 const sample = {
                     at: now,
                     wallTimeMs: nowWallMs,
+                    battleTime: this.battleTime,
                     wave,
                     maxWave,
                     rebirthTimeSec,
@@ -538,6 +539,7 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
         const initialSample = {
             at: trackedWaveStartedAt,
             wallTimeMs: Date.now(),
+            battleTime: controller.battleTime,
             wave: initialDisplayWave,
             maxWave,
             rebirthTimeSec: initialRebirthTimeSec,
