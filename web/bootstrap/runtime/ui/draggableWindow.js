@@ -1,3 +1,10 @@
+function getDragBounds() {
+    return {
+        width: document.documentElement.clientWidth || window.innerWidth,
+        height: document.documentElement.clientHeight || window.innerHeight
+    };
+}
+
 export function installDraggableWindow(node, handle, storageKey) {
     if (!node || !handle) {
         return;
@@ -25,8 +32,9 @@ export function installDraggableWindow(node, handle, storageKey) {
 
     function clampPosition(left, top) {
         const rect = node.getBoundingClientRect();
-        const maxLeft = Math.max(0, window.innerWidth - rect.width);
-        const maxTop = Math.max(0, window.innerHeight - rect.height);
+        const bounds = getDragBounds();
+        const maxLeft = Math.max(0, bounds.width - rect.width);
+        const maxTop = Math.max(0, bounds.height - rect.height);
         return {
             left: Math.min(Math.max(0, left), maxLeft),
             top: Math.min(Math.max(0, top), maxTop)

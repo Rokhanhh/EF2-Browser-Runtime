@@ -53,6 +53,11 @@ html.ef-virtual-viewport #app canvas {
     height: var(--ef-virtual-viewport-height) !important;
 }
 
+.notice2-root .notice2-game-area {
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+}
+
 #splash {
     position: fixed;
     inset: 0;

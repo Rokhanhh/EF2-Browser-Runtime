@@ -293,6 +293,20 @@ function writeBooleanPreference(key, value) {
     }
 }
 
+function getDragBounds() {
+    return {
+        width: document.documentElement.clientWidth || window.innerWidth,
+        height: document.documentElement.clientHeight || window.innerHeight
+    };
+}
+
+function getResizeBounds() {
+    return {
+        width: document.documentElement.clientWidth || window.innerWidth,
+        height: document.documentElement.clientHeight || window.innerHeight
+    };
+}
+
 function installDraggableWindow(node, handle, storageKey) {
     if (!node || !handle) {
         return;
@@ -320,8 +334,9 @@ function installDraggableWindow(node, handle, storageKey) {
 
     function clampPosition(left, top) {
         const rect = node.getBoundingClientRect();
-        const maxLeft = Math.max(0, window.innerWidth - rect.width);
-        const maxTop = Math.max(0, window.innerHeight - rect.height);
+        const bounds = getDragBounds();
+        const maxLeft = Math.max(0, bounds.width - rect.width);
+        const maxTop = Math.max(0, bounds.height - rect.height);
         return {
             left: Math.min(Math.max(0, left), maxLeft),
             top: Math.min(Math.max(0, top), maxTop)
@@ -405,8 +420,9 @@ function installResizableWindow(node, handle, storageKey, { minWidth, minHeight 
         node.style.top = `${rect.top}px`;
         node.style.right = "auto";
         node.style.bottom = "auto";
-        const maxWidth = Math.max(minWidth, window.innerWidth - rect.left);
-        const maxHeight = Math.max(minHeight, window.innerHeight - rect.top);
+        const bounds = getResizeBounds();
+        const maxWidth = Math.max(minWidth, bounds.width - rect.left);
+        const maxHeight = Math.max(minHeight, bounds.height - rect.top);
         const nextWidth = Math.min(Math.max(minWidth, width), maxWidth);
         const nextHeight = Math.min(Math.max(minHeight, height), maxHeight);
         node.style.width = `${nextWidth}px`;
