@@ -1,5 +1,5 @@
 import { installDraggableWindow } from "./draggableWindow.js";
-import { renderGeneralPanel } from "./generalPanel.js";
+import { bindGeneralSettingsControls, renderGeneralPanel } from "./generalPanel.js";
 import {
     bindPluginVisibilityControls,
     createPluginVisibility,
@@ -177,6 +177,18 @@ function ensureRuntimeMenuStyle() {
   justify-content: center;
   pointer-events: none;
 }
+#${RUNTIME_MENU_ID} .ef-runtime-general-toggle {
+  width: 72px;
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#${RUNTIME_MENU_ID} .ef-runtime-general-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
 #${RUNTIME_MENU_ID} .ef-runtime-plugin-list {
   display: grid;
   grid-template-columns: 1fr;
@@ -278,6 +290,7 @@ ${renderPluginPanel(pluginItems)}
         });
     }
     bindPluginVisibilityControls(pluginInputs, pluginVisibility);
+    bindGeneralSettingsControls(node);
 
     setCollapsed(readBooleanPreference(RUNTIME_MENU_COLLAPSED_STORAGE_KEY, false));
     selectTab(tabButtons, panels, "general");

@@ -20,6 +20,8 @@ from .config import (
     WS_PROXY_PREFIX,
     WEB_ROOT,
     get_logging_flags,
+    get_runtime_flags,
+    set_runtime_flag,
 )
 from .bundle import prepare_remote_bundle
 from .logging_utils import log_error, log_http
@@ -55,6 +57,7 @@ FORCE_GB_BOOTSTRAP_SCRIPT = """
 </script>
 """.strip()
 INTEGRITY_CHECK_PATHS = {"/", "/index.html", "/game-manifest.json", "/assets/index.js"}
+RUNTIME_SETTINGS_PATH = "/__ef_runtime_settings__"
 
 
 def is_client_disconnect(error: BaseException) -> bool:
@@ -72,13 +75,14 @@ def close_upstream_connection(connection: http.client.HTTPConnection) -> None:
         pass
 
 
-def build_browser_runtime_config() -> dict[str, str]:
+def build_browser_runtime_config() -> dict[str, object]:
     return {
         "remoteOrigin": REMOTE_BASE,
         "remoteWsOrigin": REMOTE_WS_ORIGIN,
         "proxyPrefix": PROXY_PREFIX,
         "wsProxyPrefix": WS_PROXY_PREFIX,
         "appBasePath": APP_BASE_PATH,
+        "openAtStart": get_runtime_flags()["openAtStart"],
     }
 
 
@@ -247,6 +251,9 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         if request_path == PLUGIN_MANIFEST_PATH:
             self._serve_plugins_manifest()
             return
+        if request_path == RUNTIME_SETTINGS_PATH:
+            self._serve_runtime_settings()
+            return
         if request_path.startswith(PLUGIN_ROUTE_PREFIX + "/"):
             if self._serve_plugin_asset(request_path):
                 return
@@ -281,6 +288,9 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         if request_path == PLUGIN_MANIFEST_PATH:
             self._serve_plugins_manifest(head_only=True)
             return
+        if request_path == RUNTIME_SETTINGS_PATH:
+            self._serve_runtime_settings(head_only=True)
+            return
         if request_path.startswith(PLUGIN_ROUTE_PREFIX + "/"):
             if self._serve_plugin_asset(request_path, head_only=True):
                 return
@@ -300,6 +310,10 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         super().do_HEAD()
 
     def do_POST(self) -> None:
+        request_path = urllib.parse.urlsplit(self.path).path
+        if request_path == RUNTIME_SETTINGS_PATH:
+            self._update_runtime_settings()
+            return
         if self.path.startswith(PROXY_PREFIX):
             self._proxy_request("POST")
             return
@@ -355,6 +369,44 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         if not head_only:
             self.wfile.write(payload)
+
+    def _serve_runtime_settings(self, head_only: bool = False) -> None:
+        payload = json.dumps(get_runtime_flags()).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(payload)
+
+    def _update_runtime_settings(self) -> None:
+        length_text = self.headers.get("Content-Length", "0") or "0"
+        try:
+            length = int(length_text)
+        except (TypeError, ValueError):
+            self._write_response(400, b"Invalid Content-Length header", {"Content-Type": "text/plain; charset=utf-8"})
+            return
+        if length < 0 or length > 4096:
+            self._write_response(400, b"Invalid settings payload", {"Content-Type": "text/plain; charset=utf-8"})
+            return
+
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self._write_response(400, b"Invalid JSON payload", {"Content-Type": "text/plain; charset=utf-8"})
+            return
+        if not isinstance(payload, dict) or not isinstance(payload.get("openAtStart"), bool):
+            self._write_response(400, b"Invalid settings payload", {"Content-Type": "text/plain; charset=utf-8"})
+            return
+
+        try:
+            settings = set_runtime_flag("openAtStart", payload["openAtStart"])
+        except ValueError as error:
+            self._write_response(400, str(error).encode("utf-8"), {"Content-Type": "text/plain; charset=utf-8"})
+            return
+
+        response_payload = json.dumps(settings).encode("utf-8")
+        self._write_response(200, response_payload, {"Content-Type": "application/json; charset=utf-8"})
 
     def _serve_plugin_asset(self, request_path: str, head_only: bool = False) -> bool:
         asset_path = resolve_plugin_asset_path(urllib.parse.unquote(request_path))

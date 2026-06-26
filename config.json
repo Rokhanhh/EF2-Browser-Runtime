@@ -1,5 +1,6 @@
 {
   "listenPort": 8080,
+  "openAtStart": true,
   "logging": {
     "showRequestLogs": false,
     "showAssetRequestLogs": false

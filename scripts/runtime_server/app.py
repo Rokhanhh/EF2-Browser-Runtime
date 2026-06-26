@@ -8,6 +8,7 @@ import socket
 import socketserver
 import threading
 import time
+import webbrowser
 
 from . import state
 from .bundle import prepare_remote_bundle
@@ -15,6 +16,7 @@ from .config import (
     APP_BASE_PATH,
     LISTEN_PORT,
     RUNTIME_ROOT,
+    get_runtime_flags,
 )
 from .handler import RuntimeHandler, start_upstream_preconnect
 from .logging_utils import log_credits, log_server, log_server_status
@@ -54,6 +56,16 @@ def log_runtime_ready(server_url: str) -> None:
     else:
         log_server("Local plugins: none")
     log_server(f"Press {STOP_HOTKEY_TEXT} to stop and close")
+
+
+def open_server_url_if_enabled(server_url: str) -> None:
+    if not get_runtime_flags()["openAtStart"]:
+        return
+    try:
+        webbrowser.open(server_url, new=2, autoraise=True)
+        log_server("Opened browser")
+    except Exception as error:
+        log_server(f"Could not open browser: {error}")
 
 
 def start_server_heartbeat(started_at: float, stop_event: threading.Event) -> None:
@@ -126,6 +138,7 @@ def main() -> None:
 
         server_url = build_server_url(args.port)
         log_runtime_ready(server_url)
+        open_server_url_if_enabled(server_url)
         start_server_heartbeat(started_at, stop_event)
 
         def request_stop() -> None:
