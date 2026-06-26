@@ -57,6 +57,9 @@ export default {
 - `setup(runtime)`: installs the plugin and returns a handle.
 - `detach()`: removes timers, listeners, overlays, and hooks created by the plugin.
 
+Any visible overlay root should include `data-ef-plugin-overlay="<plugin-id>"`.
+The runtime plugin panel uses this attribute to show or hide plugin overlays.
+
 ## Runtime Object
 
 `setup(runtime)` receives:

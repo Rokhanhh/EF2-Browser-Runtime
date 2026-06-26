@@ -535,6 +535,7 @@ export function createAutoSkillerOverlay() {
 
     const node = document.createElement("div");
     node.id = OVERLAY_ID;
+    node.dataset.efPluginOverlay = "auto-skiller";
     node.innerHTML = `
 <div class="ef-auto-skiller-header">
   <div class="ef-auto-skiller-title">Auto Skills</div>

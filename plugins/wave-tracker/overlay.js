@@ -1,4 +1,4 @@
-const OVERLAY_ID = "ef-wave-overlay";
+const OVERLAY_ID = "ef-wave-tracker-overlay";
 const MEDAL_BUFF_STORAGE_KEY = "__EF_WAVE_TRACKER_MEDAL_BUFF_PERCENT__";
 const MINIMIZED_STORAGE_KEY = "__EF_WAVE_TRACKER_MINIMIZED__";
 const SIZE_STORAGE_KEY = "__EF_WAVE_TRACKER_SIZE__";
@@ -462,6 +462,7 @@ export function createWaveOverlay() {
     ensureStyle();
     const node = document.createElement("div");
     node.id = OVERLAY_ID;
+    node.dataset.efPluginOverlay = "wave-tracker";
     node.innerHTML = `
 <div class="ef-wave-header">
   <div class="ef-wave-title">Wave Tracker</div>

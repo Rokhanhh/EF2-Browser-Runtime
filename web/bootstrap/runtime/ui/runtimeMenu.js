@@ -4,6 +4,7 @@ import {
     bindPluginVisibilityControls,
     createPluginVisibility,
     normalizePluginItems,
+    observePluginOverlayVisibility,
     renderPluginPanel,
     syncPluginVisibility
 } from "./pluginPanel.js";
@@ -307,5 +308,6 @@ ${renderPluginPanel(pluginItems)}
     selectTab(tabButtons, panels, "general");
     syncPluginVisibility(pluginInputs, pluginVisibility);
     document.body.appendChild(node);
+    observePluginOverlayVisibility(pluginVisibility);
     installDraggableWindow(node, header, RUNTIME_MENU_POSITION_STORAGE_KEY);
 }
