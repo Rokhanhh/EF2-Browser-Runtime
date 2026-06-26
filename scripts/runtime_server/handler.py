@@ -181,15 +181,12 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
 
     def _set_runtime_cache_headers(self) -> None:
         request_path = urllib.parse.urlsplit(getattr(self, "path", "")).path
-        normalized_path = normalize_app_path(request_path)
-        if (
-            normalized_path in {"/", "/index.html", "/game-manifest.json", "/assets/index.js", "/assets/index.css"}
-            or normalized_path.startswith("/bootstrap/")
-            or request_path.startswith(PLUGIN_ROUTE_PREFIX)
-        ):
-            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
-            self.send_header("Pragma", "no-cache")
-            self.send_header("Expires", "0")
+        if request_path.startswith(PROXY_PREFIX) or request_path.startswith(WS_PROXY_PREFIX):
+            return
+
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
 
     def log_message(self, format: str, *args) -> None:
         if not get_logging_flags()["showRequestLogs"]:
@@ -276,7 +273,7 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         if not is_app_request:
             self.send_error(404, "Use the configured app base path")
             return
-        super().do_GET()
+        self._serve_static_request("GET")
 
     def do_HEAD(self) -> None:
         request_path = urllib.parse.urlsplit(self.path).path
@@ -310,7 +307,7 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         if not is_app_request:
             self.send_error(404, "Use the configured app base path")
             return
-        super().do_HEAD()
+        self._serve_static_request("HEAD")
 
     def do_POST(self) -> None:
         request_path = urllib.parse.urlsplit(self.path).path
@@ -366,23 +363,27 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
 
     def _serve_plugins_manifest(self, head_only: bool = False) -> None:
         payload = json.dumps(build_plugins_manifest()).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        if not head_only:
-            self.wfile.write(payload)
+        self._write_response(
+            200,
+            b"" if head_only else payload,
+            {
+                "Content-Type": "application/json; charset=utf-8",
+                "Content-Length": str(len(payload)),
+            },
+        )
 
     def _serve_runtime_settings(self, head_only: bool = False) -> None:
         settings = get_runtime_flags()
         settings["gameViewport"] = get_game_viewport_config()
         payload = json.dumps(settings).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        if not head_only:
-            self.wfile.write(payload)
+        self._write_response(
+            200,
+            b"" if head_only else payload,
+            {
+                "Content-Type": "application/json; charset=utf-8",
+                "Content-Length": str(len(payload)),
+            },
+        )
 
     def _update_runtime_settings(self) -> None:
         length_text = self.headers.get("Content-Length", "0") or "0"
@@ -440,13 +441,28 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         elif asset_path.suffix == ".json":
             content_type = "application/json; charset=utf-8"
 
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        if not head_only:
-            self.wfile.write(payload)
+        self._write_response(
+            200,
+            b"" if head_only else payload,
+            {
+                "Content-Type": content_type,
+                "Content-Length": str(len(payload)),
+            },
+        )
         return True
+
+    def _serve_static_request(self, method: str) -> bool:
+        try:
+            if method == "HEAD":
+                super().do_HEAD()
+            else:
+                super().do_GET()
+            return True
+        except Exception as error:
+            if not is_client_disconnect(error):
+                raise
+            self.close_connection = True
+            return False
 
     def _inject_runtime_config_script(self, html: str) -> str:
         if f'id="{RUNTIME_CONFIG_SCRIPT_ID}"' in html:
@@ -489,10 +505,14 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(status_code)
             if upstream_headers:
                 self._copy_upstream_headers(upstream_headers, skip_content_length=True)
+            has_content_length = False
             if headers:
                 for header, value in headers.items():
+                    if header.lower() == "content-length":
+                        has_content_length = True
                     self.send_header(header, value)
-            self.send_header("Content-Length", str(len(payload)))
+            if not has_content_length:
+                self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
             return True
@@ -626,11 +646,7 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         original_path = self.path
         try:
             self.path = upstream_path
-            if method == "HEAD":
-                super().do_HEAD()
-            else:
-                super().do_GET()
-            return True
+            return self._serve_static_request(method)
         finally:
             self.path = original_path
 
