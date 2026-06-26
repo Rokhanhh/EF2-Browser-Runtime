@@ -58,7 +58,7 @@ export default {
 - `detach()`: removes timers, listeners, overlays, and hooks created by the plugin.
 
 Any visible overlay root should include `data-ef-plugin-overlay="<plugin-id>"`.
-The runtime plugin panel uses this attribute to show or hide plugin overlays.
+The plugin panel uses this attribute to show or hide plugin overlays.
 
 ## Runtime Object
 

@@ -24,22 +24,9 @@ function writePluginVisiblePreference(pluginId, visible) {
     }
 }
 
-function legacyPluginOverlayIds(pluginId) {
-    return [`ef-${pluginId}-overlay`];
-}
-
 function setPluginOverlayVisible(pluginId, visible) {
-    const overlays = document.querySelectorAll(`[${PLUGIN_OVERLAY_ATTRIBUTE}]`);
-    for (const overlay of overlays) {
-        if (overlay.getAttribute(PLUGIN_OVERLAY_ATTRIBUTE) !== pluginId) {
-            continue;
-        }
-        overlay.style.display = visible ? "" : "none";
-    }
-
-    for (const overlayId of legacyPluginOverlayIds(pluginId)) {
-        const overlay = document.getElementById(overlayId);
-        if (overlay) {
+    for (const overlay of document.querySelectorAll(`[${PLUGIN_OVERLAY_ATTRIBUTE}]`)) {
+        if (overlay.getAttribute(PLUGIN_OVERLAY_ATTRIBUTE) === pluginId) {
             overlay.style.display = visible ? "" : "none";
         }
     }
@@ -57,18 +44,6 @@ function syncOverlayElementVisibility(overlay, pluginVisibility) {
 function syncPotentialOverlayElementVisibility(overlay, pluginVisibility) {
     if (overlay.hasAttribute(PLUGIN_OVERLAY_ATTRIBUTE)) {
         syncOverlayElementVisibility(overlay, pluginVisibility);
-        return;
-    }
-
-    const overlayId = overlay.id || "";
-    if (!overlayId) {
-        return;
-    }
-    for (const [pluginId, visible] of pluginVisibility.entries()) {
-        if (legacyPluginOverlayIds(pluginId).includes(overlayId)) {
-            overlay.style.display = visible !== false ? "" : "none";
-            return;
-        }
     }
 }
 
