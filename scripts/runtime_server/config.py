@@ -68,6 +68,13 @@ WS_PROXY_PREFIX = "/__ef_ws_proxy__"
 APP_BASE_PATH = "/endlessfrontier2"
 LISTEN_PORT = _get_port(CONFIG, "listenPort", 8080)
 
+GAME_VIEWPORT_PRESETS: dict[str, dict[str, int | bool]] = {
+    "original": {"enabled": False, "width": 640, "height": 1137},
+    "tall": {"enabled": True, "width": 500, "height": 937},
+    "extraTall": {"enabled": True, "width": 480, "height": 937},
+    "fullTitle": {"enabled": True, "width": 450, "height": 937},
+}
+
 def get_logging_flags() -> dict[str, bool]:
     logging_config = _get_section(get_config(), "logging")
     return {
@@ -81,6 +88,30 @@ def get_runtime_flags() -> dict[str, bool]:
     return {
         "openAtStart": _get_bool(config, "openAtStart", False),
     }
+
+
+def get_game_viewport_config() -> dict[str, object]:
+    viewport_config = _get_section(get_config(), "gameViewport")
+    preset_name = viewport_config.get("preset")
+    if not isinstance(preset_name, str) or preset_name not in GAME_VIEWPORT_PRESETS:
+        preset_name = "original"
+    preset = GAME_VIEWPORT_PRESETS[preset_name]
+    return {
+        "preset": preset_name,
+        "presets": GAME_VIEWPORT_PRESETS,
+        "enabled": bool(preset["enabled"]),
+        "width": int(preset["width"]),
+        "height": int(preset["height"]),
+    }
+
+
+def set_game_viewport_preset(preset_name: str) -> dict[str, object]:
+    if preset_name not in GAME_VIEWPORT_PRESETS:
+        raise ValueError(f"Unsupported game viewport preset: {preset_name}")
+    config = get_config()
+    config["gameViewport"] = {"preset": preset_name}
+    save_config(config)
+    return get_game_viewport_config()
 
 
 def set_runtime_flag(key: str, value: bool) -> dict[str, bool]:

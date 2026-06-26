@@ -189,6 +189,17 @@ function ensureRuntimeMenuStyle() {
   height: 16px;
   margin: 0;
 }
+#${RUNTIME_MENU_ID} .ef-runtime-general-select {
+  width: 72px;
+  height: 26px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 224, 138, 0.35);
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.42);
+  color: #ffe08a;
+  font: inherit;
+  padding: 0 4px;
+}
 #${RUNTIME_MENU_ID} .ef-runtime-plugin-list {
   display: grid;
   grid-template-columns: 1fr;

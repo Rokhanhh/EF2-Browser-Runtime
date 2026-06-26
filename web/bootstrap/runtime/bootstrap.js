@@ -2,6 +2,7 @@ import { ensureBrowserGlobals } from "./globals.js";
 import { callGameStart, loadCssFile, loadManifest, loadModule } from "./loader.js";
 import { createPluginRuntime, installRuntimePlugins } from "./plugin-api/index.js";
 import { installRuntimeMenu, setLoaderState, setStatus, showError } from "./ui.js";
+import { installVirtualViewport } from "./virtualViewport.js";
 
 async function waitForSplashFirstPaint() {
     // Let the splash render before loading the heavy game module.
@@ -24,6 +25,7 @@ async function bootstrapRuntime() {
         window.updateSplashVersion(manifest.version || "unknown");
     }
     ensureBrowserGlobals(manifest.version || "0.0.0");
+    installVirtualViewport(window.__EF_RUNTIME_CONFIG__?.gameViewport);
 
     setLoaderState("awaiting-start");
     setStatus("Press Start Game");

@@ -33,6 +33,26 @@ canvas {
     touch-action: none;
 }
 
+html.ef-virtual-viewport body {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    background: #333333;
+}
+
+html.ef-virtual-viewport #app {
+    position: relative;
+    width: var(--ef-virtual-viewport-width) !important;
+    height: var(--ef-virtual-viewport-height) !important;
+    overflow: hidden;
+    flex: 0 0 auto;
+}
+
+html.ef-virtual-viewport #app canvas {
+    width: var(--ef-virtual-viewport-width) !important;
+    height: var(--ef-virtual-viewport-height) !important;
+}
+
 #splash {
     position: fixed;
     inset: 0;

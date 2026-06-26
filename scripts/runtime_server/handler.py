@@ -19,8 +19,10 @@ from .config import (
     REMOTE_WS_ORIGIN,
     WS_PROXY_PREFIX,
     WEB_ROOT,
+    get_game_viewport_config,
     get_logging_flags,
     get_runtime_flags,
+    set_game_viewport_preset,
     set_runtime_flag,
 )
 from .bundle import prepare_remote_bundle
@@ -83,6 +85,7 @@ def build_browser_runtime_config() -> dict[str, object]:
         "wsProxyPrefix": WS_PROXY_PREFIX,
         "appBasePath": APP_BASE_PATH,
         "openAtStart": get_runtime_flags()["openAtStart"],
+        "gameViewport": get_game_viewport_config(),
     }
 
 
@@ -371,7 +374,9 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(payload)
 
     def _serve_runtime_settings(self, head_only: bool = False) -> None:
-        payload = json.dumps(get_runtime_flags()).encode("utf-8")
+        settings = get_runtime_flags()
+        settings["gameViewport"] = get_game_viewport_config()
+        payload = json.dumps(settings).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
@@ -395,12 +400,23 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         except (UnicodeDecodeError, json.JSONDecodeError):
             self._write_response(400, b"Invalid JSON payload", {"Content-Type": "text/plain; charset=utf-8"})
             return
-        if not isinstance(payload, dict) or not isinstance(payload.get("openAtStart"), bool):
+        if not isinstance(payload, dict):
             self._write_response(400, b"Invalid settings payload", {"Content-Type": "text/plain; charset=utf-8"})
             return
 
         try:
-            settings = set_runtime_flag("openAtStart", payload["openAtStart"])
+            settings = get_runtime_flags()
+            if "openAtStart" in payload:
+                if not isinstance(payload.get("openAtStart"), bool):
+                    self._write_response(400, b"Invalid settings payload", {"Content-Type": "text/plain; charset=utf-8"})
+                    return
+                settings = set_runtime_flag("openAtStart", payload["openAtStart"])
+            if "gameViewportPreset" in payload:
+                if not isinstance(payload.get("gameViewportPreset"), str):
+                    self._write_response(400, b"Invalid settings payload", {"Content-Type": "text/plain; charset=utf-8"})
+                    return
+                set_game_viewport_preset(payload["gameViewportPreset"])
+            settings["gameViewport"] = get_game_viewport_config()
         except ValueError as error:
             self._write_response(400, str(error).encode("utf-8"), {"Content-Type": "text/plain; charset=utf-8"})
             return

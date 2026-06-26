@@ -4,5 +4,8 @@
   "logging": {
     "showRequestLogs": false,
     "showAssetRequestLogs": false
+  },
+  "gameViewport": {
+    "preset": "original"
   }
 }
