@@ -401,6 +401,10 @@ function installResizableWindow(node, handle, storageKey, { minWidth, minHeight 
 
     function setSize(width, height, persist = false) {
         const rect = node.getBoundingClientRect();
+        node.style.left = `${rect.left}px`;
+        node.style.top = `${rect.top}px`;
+        node.style.right = "auto";
+        node.style.bottom = "auto";
         const maxWidth = Math.max(minWidth, window.innerWidth - rect.left);
         const maxHeight = Math.max(minHeight, window.innerHeight - rect.top);
         const nextWidth = Math.min(Math.max(minWidth, width), maxWidth);
@@ -415,7 +419,7 @@ function installResizableWindow(node, handle, storageKey, { minWidth, minHeight 
     }
 
     const storedSize = readSize();
-    if (storedSize) {
+    if (storedSize && !node.classList.contains("ef-wave-minimized")) {
         requestAnimationFrame(() => setSize(storedSize.width, storedSize.height));
     }
     node.__efApplyStoredSize = () => {
@@ -495,6 +499,7 @@ export function createWaveOverlay() {
     let lastMetricsHtml = "";
     let lastStatusHtml = "";
     let lastMedalsHtml = "";
+    let lastAppliedMinimized = null;
     if (medalBuffInput) {
         medalBuffInput.value = String(medalBuffPercent);
     }
@@ -511,13 +516,16 @@ export function createWaveOverlay() {
 
     function syncMinimizedState() {
         node.classList.toggle("ef-wave-minimized", minimized);
-        if (minimized) {
-            node.style.width = "";
-            node.style.height = "";
-            node.style.minWidth = "";
-            node.style.minHeight = "";
-        } else {
-            node.__efApplyStoredSize?.();
+        if (minimized !== lastAppliedMinimized) {
+            if (minimized) {
+                node.style.width = "";
+                node.style.height = "";
+                node.style.minWidth = "";
+                node.style.minHeight = "";
+            } else {
+                node.__efApplyStoredSize?.();
+            }
+            lastAppliedMinimized = minimized;
         }
         if (toggleButton) {
             toggleButton.textContent = minimized ? "+" : "-";
@@ -605,6 +613,7 @@ export function createWaveOverlay() {
     renderStatus("Status", "scanning");
     document.body.appendChild(node);
     installDraggableWindow(node, header, "__EF_WAVE_TRACKER_POSITION__");
+    syncMinimizedState();
     installResizableWindow(node, resizeHandle, SIZE_STORAGE_KEY, { minWidth: 220, minHeight: 180 });
 
     return {

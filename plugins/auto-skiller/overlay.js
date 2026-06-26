@@ -366,6 +366,10 @@ function installResizableWindow(node, handle, storageKey, { minWidth, minHeight 
 
     function setSize(width, height, persist = false) {
         const rect = node.getBoundingClientRect();
+        node.style.left = `${rect.left}px`;
+        node.style.top = `${rect.top}px`;
+        node.style.right = "auto";
+        node.style.bottom = "auto";
         const maxWidth = Math.max(minWidth, window.innerWidth - rect.left);
         const maxHeight = Math.max(minHeight, window.innerHeight - rect.top);
         const nextWidth = Math.min(Math.max(minWidth, width), maxWidth);
@@ -380,7 +384,7 @@ function installResizableWindow(node, handle, storageKey, { minWidth, minHeight 
     }
 
     const storedSize = readSize();
-    if (storedSize) {
+    if (storedSize && !node.classList.contains("ef-auto-skiller-collapsed")) {
         requestAnimationFrame(() => setSize(storedSize.width, storedSize.height));
     }
     node.__efApplyStoredSize = () => {
@@ -561,7 +565,6 @@ export function createAutoSkillerOverlay() {
 
     document.body.appendChild(node);
     installDraggableWindow(node, header, "__EF_AUTO_SKILLER_POSITION__");
-    installResizableWindow(node, resizeHandle, SIZE_STORAGE_KEY, { minWidth: 230, minHeight: 220 });
 
     function setCollapsed(nextCollapsed) {
         collapsed = !!nextCollapsed;
@@ -608,6 +611,7 @@ export function createAutoSkillerOverlay() {
         list.innerHTML = lastListHtml;
     }
     setCollapsed(readBooleanPreference(COLLAPSED_STORAGE_KEY, false));
+    installResizableWindow(node, resizeHandle, SIZE_STORAGE_KEY, { minWidth: 230, minHeight: 220 });
 
     return {
         setScanning(message = "Scanning...") {
