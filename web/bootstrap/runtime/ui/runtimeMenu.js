@@ -157,13 +157,13 @@ function ensureRuntimeMenuStyle() {
 #${RUNTIME_MENU_ID} .ef-runtime-general-row {
   min-height: 28px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 72px;
+  grid-template-columns: minmax(0, 1fr) 84px;
   gap: 8px;
   align-items: center;
   color: rgba(255, 224, 138, 0.86);
 }
 #${RUNTIME_MENU_ID} .ef-runtime-general-value {
-  width: 72px;
+  width: 84px;
   height: 26px;
   box-sizing: border-box;
   border: 1px solid rgba(255, 224, 138, 0.35);
@@ -179,7 +179,7 @@ function ensureRuntimeMenuStyle() {
   pointer-events: none;
 }
 #${RUNTIME_MENU_ID} .ef-runtime-general-toggle {
-  width: 72px;
+  width: 84px;
   min-height: 26px;
   display: flex;
   align-items: center;
@@ -191,7 +191,16 @@ function ensureRuntimeMenuStyle() {
   margin: 0;
 }
 #${RUNTIME_MENU_ID} .ef-runtime-general-select {
-  width: 72px;
+  display: none;
+}
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-wrap {
+  position: relative;
+  width: 84px;
+  height: 26px;
+  display: block;
+}
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-button {
+  width: 84px;
   height: 26px;
   box-sizing: border-box;
   border: 1px solid rgba(255, 224, 138, 0.35);
@@ -199,7 +208,72 @@ function ensureRuntimeMenuStyle() {
   background: rgba(0, 0, 0, 0.42);
   color: #ffe08a;
   font: inherit;
-  padding: 0 4px;
+  padding: 0 18px 0 5px;
+  cursor: pointer;
+  outline: none;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background-image: linear-gradient(45deg, transparent 50%, #ffe08a 50%), linear-gradient(135deg, #ffe08a 50%, transparent 50%);
+  background-position: calc(100% - 10px) 10px, calc(100% - 6px) 10px;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-button:hover:not(:disabled),
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-button:focus,
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-wrap.is-open .ef-runtime-general-select-button {
+  border-color: rgba(255, 224, 138, 0.65);
+  background-color: rgba(255, 224, 138, 0.12);
+}
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-button:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-menu {
+  display: none;
+  position: absolute;
+  top: 28px;
+  left: 0;
+  z-index: 2;
+  width: 84px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 224, 138, 0.45);
+  border-radius: 5px;
+  overflow: hidden;
+  background: #11100c;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.42);
+}
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-wrap.is-open .ef-runtime-general-select-menu {
+  display: block;
+}
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-option {
+  width: 100%;
+  min-height: 24px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  background: #11100c;
+  color: #ffe08a;
+  font: inherit;
+  padding: 0 5px;
+  cursor: pointer;
+  text-align: left;
+}
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-option:hover,
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-option:focus {
+  background: #2b2412;
+  color: #ffe08a;
+  outline: none;
+}
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-option[aria-selected="true"] {
+  background: #3a2f12;
+  color: #ffe08a;
+}
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-option[aria-selected="true"]:hover,
+#${RUNTIME_MENU_ID} .ef-runtime-general-select-option[aria-selected="true"]:focus {
+  background: #4a3b16;
+  color: #ffe08a;
 }
 #${RUNTIME_MENU_ID} .ef-runtime-plugin-list {
   display: grid;
