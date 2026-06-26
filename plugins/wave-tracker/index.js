@@ -1,4 +1,3 @@
-import { installWaveCandidateDetector } from "/endlessfrontier2/bootstrap/runtime/wave-detector.js";
 import { createWaveMetrics } from "./metrics.js";
 import { createWaveOverlay } from "./overlay.js";
 
@@ -569,7 +568,10 @@ export function attachWaveTracker({ scanWarnMs = 15000, scanHardTimeoutMs = null
     try {
         stopDetector = hooks && typeof hooks.onWaveController === "function"
             ? hooks.onWaveController(hookController)
-            : installWaveCandidateDetector(hookController);
+            : null;
+        if (!stopDetector) {
+            throw new Error("wave controller hook unavailable");
+        }
     } catch (error) {
         overlay.setError("detector install failed");
         return { detach() {} };

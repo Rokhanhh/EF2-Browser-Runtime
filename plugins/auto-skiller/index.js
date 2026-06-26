@@ -1,5 +1,3 @@
-import { installObjectPropertyCandidateDetector } from "/endlessfrontier2/bootstrap/runtime/property-detector.js";
-import { installWaveCandidateDetector } from "/endlessfrontier2/bootstrap/runtime/wave-detector.js";
 import { createAutoSkillerOverlay } from "./overlay.js";
 
 const ACTIVE_SKILL_FPS = 60;
@@ -105,7 +103,10 @@ function isActiveSkillButton(candidate) {
 function installActiveSkillButtonObserver(onCandidate, hooks = null) {
     const installDetector = hooks && typeof hooks.onObjectWithProperties === "function"
         ? hooks.onObjectWithProperties
-        : installObjectPropertyCandidateDetector;
+        : null;
+    if (!installDetector) {
+        return () => {};
+    }
     return installDetector(["remainingFrames"], (candidate) => {
         if (!isPotentialActiveSkillButton(candidate)) {
             return;
@@ -130,7 +131,10 @@ function isWaveCallInfo(candidate) {
 function installWaveCallInfoObserver(onCandidate, hooks = null) {
     const installDetector = hooks && typeof hooks.onObjectWithProperties === "function"
         ? hooks.onObjectWithProperties
-        : installObjectPropertyCandidateDetector;
+        : null;
+    if (!installDetector) {
+        return () => {};
+    }
     return installDetector(["pendingCalls", "maxEnergy", "lastCallTime"], (candidate) => {
         if (!isWaveCallInfo(candidate)) {
             return;
@@ -154,7 +158,10 @@ function isBattleManager(candidate) {
 function installBattleManagerObserver(onCandidate, hooks = null) {
     const installDetector = hooks && typeof hooks.onObjectWithProperties === "function"
         ? hooks.onObjectWithProperties
-        : installObjectPropertyCandidateDetector;
+        : null;
+    if (!installDetector) {
+        return () => {};
+    }
     return installDetector(["currentBattle", "idleBattle", "battleState"], (candidate) => {
         if (!isBattleManager(candidate)) {
             return;
@@ -180,7 +187,10 @@ function installWaveStartObserver(onWaveStart, hooks = null) {
     let detachHook = null;
     const installDetector = hooks && typeof hooks.onWaveController === "function"
         ? hooks.onWaveController
-        : installWaveCandidateDetector;
+        : null;
+    if (!installDetector) {
+        return () => {};
+    }
     const stopDetector = installDetector((controller) => {
         if (!isWaveController(controller)) {
             return;
@@ -244,7 +254,10 @@ function installWaveProgressObserver(onProgress, hooks = null) {
     let detachHook = null;
     const installDetector = hooks && typeof hooks.onObjectWithProperties === "function"
         ? hooks.onObjectWithProperties
-        : installObjectPropertyCandidateDetector;
+        : null;
+    if (!installDetector) {
+        return () => {};
+    }
     const stopDetector = installDetector(["waveBar"], (candidate) => {
         if (!isWaveProgressOwner(candidate)) {
             return;

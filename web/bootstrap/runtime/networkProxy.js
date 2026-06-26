@@ -8,7 +8,7 @@ import {
     notifyWebSocketCreate,
     notifyWebSocketMessage,
     notifyWebSocketSend
-} from "./networkBus.js";
+} from "./plugin-api/networkNotifier.js";
 
 function proxiedUrl(input) {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : null;

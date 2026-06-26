@@ -1,7 +1,6 @@
 import { ensureBrowserGlobals } from "./globals.js";
 import { callGameStart, loadCssFile, loadManifest, loadModule } from "./loader.js";
-import { createPluginRuntime } from "./pluginRuntime.js";
-import { installRuntimePlugins } from "./plugins.js";
+import { createPluginRuntime, installRuntimePlugins } from "./plugin-api/index.js";
 import { installRuntimeMenu, setLoaderState, setStatus, showError } from "./ui.js";
 
 async function waitForSplashFirstPaint() {
