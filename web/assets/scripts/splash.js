@@ -150,32 +150,3 @@ window.clearRuntimeCacheAndReload = async function () {
         window.clearRuntimeCacheAndReload();
     });
 })();
-
-(function monitorServerStatus() {
-    const intervalMs = 1000;
-    let timerId = null;
-
-    async function checkOnce() {
-        try {
-            const probeUrl = `./game-manifest.json?status_probe=${Date.now()}`;
-            const response = await fetch(probeUrl, { cache: "no-store" });
-            window.updateServerStatus(Boolean(response && response.ok));
-        } catch (error) {
-            window.updateServerStatus(false);
-        }
-    }
-
-    checkOnce();
-    timerId = setInterval(checkOnce, intervalMs);
-
-    const splash = document.getElementById("splash");
-    if (splash) {
-        const observer = new MutationObserver(() => {
-            if (!document.getElementById("splash")) {
-                if (timerId) clearInterval(timerId);
-                observer.disconnect();
-            }
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-    }
-})();

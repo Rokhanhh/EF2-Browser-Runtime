@@ -18,7 +18,8 @@ from .config import (
     RUNTIME_ROOT,
     get_runtime_flags,
 )
-from .handler import RuntimeHandler, start_upstream_preconnect
+from .handler import RuntimeHandler, UPSTREAM_TIMEOUT_SECONDS, start_upstream_preconnect
+from .http2_worker import start_http2_worker, stop_http2_worker
 from .logging_utils import log_credits, log_server, log_server_status
 from .plugins import discover_local_plugins
 
@@ -115,6 +116,7 @@ def main() -> None:
 
     RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
     state.set_active_bundle(*prepare_remote_bundle())
+    start_http2_worker(UPSTREAM_TIMEOUT_SECONDS)
     start_upstream_preconnect()
 
     class ThreadingTCPServer(socketserver.ThreadingTCPServer):
@@ -168,6 +170,7 @@ def main() -> None:
                 httpd.shutdown()
             except (Exception, KeyboardInterrupt):
                 pass
+            stop_http2_worker()
             if ipv6_thread and ipv6_thread.is_alive():
                 try:
                     ipv6_thread.join(timeout=1)

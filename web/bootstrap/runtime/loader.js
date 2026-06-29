@@ -1,5 +1,18 @@
 export async function loadManifest() {
-    const response = await fetch("./game-manifest.json", { cache: "no-store" });
+    let response;
+    try {
+        response = await fetch("./game-manifest.json", { cache: "no-store" });
+    } catch (error) {
+        if (typeof window.updateServerStatus === "function") {
+            window.updateServerStatus(false);
+        }
+        throw error;
+    }
+
+    if (typeof window.updateServerStatus === "function") {
+        window.updateServerStatus(response.ok);
+    }
+
     if (!response.ok) {
         throw new Error(`Could not load game-manifest.json (${response.status})`);
     }

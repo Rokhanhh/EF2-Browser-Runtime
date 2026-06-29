@@ -13,6 +13,14 @@ It is not a standalone game distribution: gameplay assets are resolved from remo
 - Python 3.10+
 - Browser with an active Google or Apple account session (required to sign in with an existing account). Firefox is recommended.
 
+### Install dependencies
+
+```powershell
+python -m pip install -r scripts/requirements.txt
+```
+
+`run_server.bat` also installs missing Python dependencies automatically before starting the runtime.
+
 ### Run
 
 ```powershell

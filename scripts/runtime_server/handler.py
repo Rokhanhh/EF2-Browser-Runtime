@@ -26,6 +26,7 @@ from .config import (
     set_runtime_flag,
 )
 from .bundle import prepare_remote_bundle
+from .http2_worker import HTTP2Response, HTTP2WorkerError, request_http2_upstream, warmup_http2_upstream
 from .logging_utils import log_error, log_http
 from .plugins import PLUGIN_MANIFEST_PATH, PLUGIN_ROUTE_PREFIX, build_plugins_manifest, resolve_plugin_asset_path
 from .static_files import choose_static_path, is_within_directory, normalize_app_path
@@ -151,6 +152,28 @@ def add_idle_upstream_connection(
 def start_upstream_preconnect(count: int = UPSTREAM_PRECONNECT_CONNECTIONS) -> None:
     upstream_key = get_remote_upstream_key()
     if not upstream_key or count <= 0:
+        return
+    scheme, host, port = upstream_key
+
+    if scheme == "https":
+        remote_base = urllib.parse.urlsplit(REMOTE_BASE)
+        netloc = host
+        if port != 443:
+            netloc = f"{host}:{port}"
+        warmup_path = remote_base.path or "/"
+        warmup_url = urllib.parse.urlunsplit((scheme, netloc, warmup_path, "", ""))
+
+        def preconnect_http2() -> None:
+            try:
+                response = warmup_http2_upstream(warmup_url, UPSTREAM_TIMEOUT_SECONDS)
+                if response.http_version != "HTTP/2" and get_logging_flags()["showRequestLogs"]:
+                    log_http(f"PROXY warmup did not negotiate HTTP/2: {response.http_version}")
+            except HTTP2WorkerError as error:
+                if get_logging_flags()["showRequestLogs"]:
+                    log_http(f"PROXY warmup failed: {error}")
+
+        thread = threading.Thread(target=preconnect_http2, name="upstream-http2-preconnect", daemon=True)
+        thread.start()
         return
 
     def preconnect_one(index: int) -> None:
@@ -567,6 +590,10 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
                 continue
             request_headers[header] = value
 
+        if scheme == "https":
+            self._proxy_https_request(method, remote_base, upstream_selector, body, request_headers)
+            return
+
         host_header = host
         if (scheme == "http" and port != 80) or (scheme == "https" and port != 443):
             host_header = f"{host}:{port}"
@@ -625,6 +652,55 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             return
         data = str(last_error or "Upstream request failed").encode("utf-8", errors="replace")
         self._write_response(502, data, {"Content-Type": "text/plain; charset=utf-8"})
+
+    def _proxy_https_request(
+        self,
+        method: str,
+        remote_base: urllib.parse.SplitResult,
+        upstream_selector: str,
+        body: bytes | None,
+        request_headers: dict[str, str],
+    ) -> None:
+        netloc = remote_base.hostname or ""
+        port = remote_base.port or 443
+        if port != 443:
+            netloc = f"{netloc}:{port}"
+        parsed_selector = urllib.parse.urlsplit(upstream_selector)
+        upstream_url = urllib.parse.urlunsplit(
+            ("https", netloc, parsed_selector.path or "/", parsed_selector.query, "")
+        )
+
+        try:
+            response = request_http2_upstream(
+                method,
+                upstream_url,
+                content=body,
+                headers=request_headers,
+                timeout_seconds=UPSTREAM_TIMEOUT_SECONDS,
+            )
+        except HTTP2WorkerError as error:
+            if get_logging_flags()["showRequestLogs"]:
+                log_http(f"PROXY {method} {upstream_selector} failed: {error}")
+            data = str(error).encode("utf-8", errors="replace")
+            self._write_response(502, data, {"Content-Type": "text/plain; charset=utf-8"})
+            return
+
+        if response.http_version != "HTTP/2":
+            message = f"Upstream did not negotiate HTTP/2: {response.http_version}"
+            if get_logging_flags()["showRequestLogs"]:
+                log_http(f"PROXY {method} {upstream_selector} failed: {message}")
+            self._write_response(502, message.encode("utf-8"), {"Content-Type": "text/plain; charset=utf-8"})
+            return
+
+        if get_logging_flags()["showRequestLogs"]:
+            slow_marker = " slow" if response.elapsed_ms >= 1000 else ""
+            log_http(
+                f"UPSTREAM {method} {upstream_selector} "
+                f"{response.status_code} {response.http_version} {response.elapsed_ms}ms{slow_marker}",
+                response.status_code,
+            )
+
+        self._write_http2_response(response)
 
     def _serve_local_proxy_target(self, upstream_path: str, method: str) -> bool:
         bundle_root = state.ACTIVE_BUNDLE_ROOT
@@ -798,6 +874,28 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
                 if not chunk:
                     break
                 self.wfile.write(chunk)
+            return True
+        except Exception as error:
+            if not is_client_disconnect(error):
+                raise
+            self.close_connection = True
+            return False
+
+    def _write_http2_response(self, upstream_response: HTTP2Response) -> bool:
+        try:
+            upstream_headers = upstream_response.headers
+            has_content_length = any(header.lower() == "content-length" for header, _ in upstream_headers)
+
+            self.send_response(upstream_response.status_code)
+            self._copy_upstream_headers(upstream_headers)
+            if not has_content_length:
+                self.send_header("Content-Length", str(len(upstream_response.content)))
+            self.end_headers()
+
+            if getattr(self, "command", "") == "HEAD":
+                return True
+
+            self.wfile.write(upstream_response.content)
             return True
         except Exception as error:
             if not is_client_disconnect(error):
