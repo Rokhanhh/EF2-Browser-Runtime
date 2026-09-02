@@ -27,6 +27,17 @@ from .plugins import discover_local_plugins
 STOP_HOTKEY_TEXT = "Ctrl+Q"
 STOP_HOTKEY_CHAR = "\x11"
 HEARTBEAT_INTERVAL_SECONDS = 1
+SERVER_REQUEST_QUEUE_SIZE = 128
+
+
+class ThreadingTCPServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+    request_queue_size = SERVER_REQUEST_QUEUE_SIZE
+
+
+class ThreadingTCPServerIPv6(ThreadingTCPServer):
+    address_family = socket.AF_INET6
 
 
 def format_duration(total_seconds: int) -> str:
@@ -118,13 +129,6 @@ def main() -> None:
     state.set_active_bundle(*prepare_remote_bundle())
     start_http2_worker(UPSTREAM_TIMEOUT_SECONDS)
     start_upstream_preconnect()
-
-    class ThreadingTCPServer(socketserver.ThreadingTCPServer):
-        allow_reuse_address = True
-        daemon_threads = True
-
-    class ThreadingTCPServerIPv6(ThreadingTCPServer):
-        address_family = socket.AF_INET6
 
     with contextlib.ExitStack() as stack:
         httpd = stack.enter_context(ThreadingTCPServer(("127.0.0.1", args.port), RuntimeHandler))

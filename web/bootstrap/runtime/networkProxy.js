@@ -225,23 +225,27 @@ export function installNetworkProxy() {
     };
 
     NativeXHR.prototype.send = function patchedSend(body) {
+        const method = this.__efOriginalMethod || "GET";
+        const originalUrl = this.__efOriginalUrl || "";
+        const proxiedUrl = this.__efProxiedUrl || "";
+
         notifyRequest({
             type: "xhr",
-            method: this.__efOriginalMethod || "GET",
-            url: this.__efOriginalUrl || "",
-            proxiedUrl: this.__efProxiedUrl || ""
+            method,
+            url: originalUrl,
+            proxiedUrl
         });
 
-        this.addEventListener("readystatechange", () => {
+        const handleLoadEnd = () => {
             if (this.readyState !== 4) {
                 return;
             }
             let text = "";
             const baseResponseEvent = {
                 type: "xhr",
-                method: this.__efOriginalMethod || "GET",
-                url: this.__efOriginalUrl || "",
-                proxiedUrl: this.__efProxiedUrl || "",
+                method,
+                url: originalUrl,
+                proxiedUrl,
                 status: this.status,
                 ok: this.status >= 200 && this.status < 300
             };
@@ -268,8 +272,14 @@ export function installNetworkProxy() {
             if (needsJsonResponseEvent) {
                 notifyJsonResponse(responseEvent);
             }
-        }, { once: true });
+        };
 
-        return nativeSend.call(this, body);
+        this.addEventListener("loadend", handleLoadEnd, { once: true });
+        try {
+            return nativeSend.call(this, body);
+        } catch (error) {
+            this.removeEventListener("loadend", handleLoadEnd);
+            throw error;
+        }
     };
 }
