@@ -9,6 +9,10 @@ from dataclasses import dataclass
 import httpx
 
 
+HTTP2_MAX_RESPONSE_BODY_BYTES = 64 * 1024 * 1024
+HTTP2_MAX_CONCURRENT_REQUESTS = 16
+
+
 @dataclass(frozen=True)
 class HTTP2Response:
     status_code: int
@@ -30,6 +34,7 @@ class HTTP2Worker:
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client: httpx.AsyncClient | None = None
+        self._request_semaphore: asyncio.Semaphore | None = None
         self._start_error: BaseException | None = None
 
     def start(self) -> None:
@@ -88,8 +93,10 @@ class HTTP2Worker:
             loop.close()
             self._loop = None
             self._client = None
+            self._request_semaphore = None
 
     async def _setup(self) -> None:
+        self._request_semaphore = asyncio.Semaphore(HTTP2_MAX_CONCURRENT_REQUESTS)
         self._client = httpx.AsyncClient(
             http2=True,
             timeout=self._timeout_seconds,
@@ -126,25 +133,40 @@ class HTTP2Worker:
     ) -> HTTP2Response:
         if not self._client:
             raise HTTP2WorkerError("HTTP/2 client is not initialized")
+        if not self._request_semaphore:
+            raise HTTP2WorkerError("HTTP/2 request limiter is not initialized")
 
-        started_at = time.perf_counter()
-        response = await self._client.request(
-            method,
-            url,
-            content=content,
-            headers=headers,
-        )
-        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
-        try:
-            return HTTP2Response(
-                status_code=response.status_code,
-                headers=list(response.headers.multi_items()),
-                content=response.content,
-                http_version=response.http_version,
-                elapsed_ms=elapsed_ms,
-            )
-        finally:
-            await response.aclose()
+        async with self._request_semaphore:
+            started_at = time.perf_counter()
+            request = self._client.build_request(method, url, content=content, headers=headers)
+            response = await self._client.send(request, stream=True)
+            try:
+                response_has_body = method.upper() != "HEAD" and not (
+                    100 <= response.status_code < 200 or response.status_code in {204, 304}
+                )
+                chunks: list[bytes] = []
+                total_size = 0
+                if response_has_body:
+                    content_length = response.headers.get("content-length")
+                    if content_length and content_length.isdigit():
+                        if int(content_length) > HTTP2_MAX_RESPONSE_BODY_BYTES:
+                            raise HTTP2WorkerError("Upstream response exceeds the allowed limit")
+                    async for chunk in response.aiter_raw():
+                        total_size += len(chunk)
+                        if total_size > HTTP2_MAX_RESPONSE_BODY_BYTES:
+                            raise HTTP2WorkerError("Upstream response exceeds the allowed limit")
+                        chunks.append(chunk)
+
+                elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+                return HTTP2Response(
+                    status_code=response.status_code,
+                    headers=list(response.headers.multi_items()),
+                    content=b"".join(chunks),
+                    http_version=response.http_version,
+                    elapsed_ms=elapsed_ms,
+                )
+            finally:
+                await response.aclose()
 
 
 _WORKER: HTTP2Worker | None = None

@@ -11,7 +11,14 @@ import {
 } from "./plugin-api/networkNotifier.js";
 
 function proxiedUrl(input) {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : null;
+    let url = null;
+    if (typeof input === "string") {
+        url = input;
+    } else if (input instanceof URL) {
+        url = input.href;
+    } else if (typeof Request === "function" && input instanceof Request) {
+        url = input.url;
+    }
     if (!url || !url.startsWith(REMOTE_ORIGIN + "/")) {
         return input;
     }
@@ -142,6 +149,8 @@ export function installNetworkProxy() {
         const originalUrl = extractUrl(input);
         const proxied = proxiedUrl(input);
         const method = extractMethod(input, init);
+        let fetchInput = proxied;
+        let fetchInit = init;
 
         notifyRequest({
             type: "fetch",
@@ -150,7 +159,13 @@ export function installNetworkProxy() {
             proxiedUrl: typeof proxied === "string" ? proxied : extractUrl(proxied)
         });
 
-        const response = await nativeFetch(proxied, init);
+        if (typeof Request === "function" && input instanceof Request && typeof proxied === "string") {
+            const effectiveRequest = new Request(input, init);
+            fetchInput = new Request(proxied, effectiveRequest);
+            fetchInit = undefined;
+        }
+
+        const response = await nativeFetch(fetchInput, fetchInit);
         const baseResponseEvent = {
             type: "fetch",
             method,

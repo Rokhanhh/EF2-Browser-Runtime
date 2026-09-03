@@ -34,6 +34,8 @@ from .static_files import choose_static_path, is_within_directory, normalize_app
 
 CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
 UPSTREAM_TIMEOUT_SECONDS = 15
+PROXY_BODY_READ_TIMEOUT_SECONDS = 15
+PROXY_MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024
 UPSTREAM_MAX_IDLE_CONNECTIONS = 8
 UPSTREAM_PRECONNECT_CONNECTIONS = 6
 UPSTREAM_POOL_LOCK = threading.Lock()
@@ -61,6 +63,24 @@ FORCE_GB_BOOTSTRAP_SCRIPT = """
 """.strip()
 INTEGRITY_CHECK_PATHS = {"/", "/index.html", "/game-manifest.json", "/assets/index.js"}
 RUNTIME_SETTINGS_PATH = "/__ef_runtime_settings__"
+HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
+
+
+class ProxyRequestBodyError(Exception):
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
 
 
 def is_client_disconnect(error: BaseException) -> bool:
@@ -570,23 +590,29 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         if parsed.query:
             upstream_selector = f"{upstream_selector}?{parsed.query}"
 
-        body = None
-        length_text = self.headers.get("Content-Length", "0") or "0"
         try:
-            length = int(length_text)
-        except (TypeError, ValueError):
-            self._write_response(400, b"Invalid Content-Length header", {"Content-Type": "text/plain; charset=utf-8"})
+            body = self._read_proxy_request_body()
+        except ProxyRequestBodyError as error:
+            self.close_connection = True
+            self._write_response(
+                error.status_code,
+                error.message.encode("utf-8"),
+                {"Content-Type": "text/plain; charset=utf-8"},
+            )
             return
-        if length < 0:
-            self._write_response(400, b"Invalid Content-Length header", {"Content-Type": "text/plain; charset=utf-8"})
-            return
-        if length > 0:
-            body = self.rfile.read(length)
 
         request_headers: dict[str, str] = {}
+        connection_headers = {
+            token.strip().lower()
+            for value in self.headers.get_all("Connection", [])
+            for token in value.split(",")
+            if token.strip()
+        }
         for header, value in self.headers.items():
             lower = header.lower()
-            if lower in {"host", "origin", "referer", "connection", "content-length"}:
+            if lower in HOP_BY_HOP_HEADERS or lower in connection_headers:
+                continue
+            if lower in {"host", "origin", "referer", "content-length"}:
                 continue
             request_headers[header] = value
 
@@ -701,6 +727,46 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             )
 
         self._write_http2_response(response)
+
+    def _read_proxy_request_body(self) -> bytes | None:
+        if self.headers.get_all("Transfer-Encoding", []):
+            raise ProxyRequestBodyError(400, "Transfer-Encoding is not supported")
+
+        content_lengths = self.headers.get_all("Content-Length", [])
+        if len(content_lengths) > 1:
+            raise ProxyRequestBodyError(400, "Duplicate Content-Length header")
+
+        if not content_lengths:
+            return None
+
+        length_text = content_lengths[0].strip()
+        if not re.fullmatch(r"[0-9]+", length_text):
+            raise ProxyRequestBodyError(400, "Invalid Content-Length header")
+
+        length = int(length_text)
+        if length > PROXY_MAX_REQUEST_BODY_BYTES:
+            raise ProxyRequestBodyError(413, "Request body exceeds the allowed limit")
+        if length == 0:
+            return None
+
+        previous_timeout = self.connection.gettimeout()
+        remaining = length
+        chunks: list[bytes] = []
+        try:
+            self.connection.settimeout(PROXY_BODY_READ_TIMEOUT_SECONDS)
+            while remaining:
+                try:
+                    chunk = self.rfile.read(remaining)
+                except (TimeoutError, socket.timeout) as error:
+                    raise ProxyRequestBodyError(408, "Timed out while reading request body") from error
+                if not chunk:
+                    raise ProxyRequestBodyError(400, "Incomplete request body")
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        finally:
+            self.connection.settimeout(previous_timeout)
+
+        return b"".join(chunks)
 
     def _serve_local_proxy_target(self, upstream_path: str, method: str) -> bool:
         bundle_root = state.ACTIVE_BUNDLE_ROOT
@@ -884,15 +950,20 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
     def _write_http2_response(self, upstream_response: HTTP2Response) -> bool:
         try:
             upstream_headers = upstream_response.headers
-            has_content_length = any(header.lower() == "content-length" for header, _ in upstream_headers)
+            method = getattr(self, "command", "")
+            status_code = upstream_response.status_code
+            has_body = method != "HEAD" and not (100 <= status_code < 200 or status_code in {204, 304})
 
-            self.send_response(upstream_response.status_code)
-            self._copy_upstream_headers(upstream_headers)
-            if not has_content_length:
+            self.send_response(status_code)
+            self._copy_upstream_headers(
+                upstream_headers,
+                skip_content_length=has_body or (100 <= status_code < 200) or status_code == 204,
+            )
+            if has_body:
                 self.send_header("Content-Length", str(len(upstream_response.content)))
             self.end_headers()
 
-            if getattr(self, "command", "") == "HEAD":
+            if not has_body:
                 return True
 
             self.wfile.write(upstream_response.content)
@@ -905,15 +976,23 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
 
     def _copy_upstream_headers(self, headers: object, skip_content_length: bool = False) -> bool:
         has_content_length = False
-        for header, value in headers:
+        header_items = list(headers)
+        connection_headers = {
+            token.strip().lower()
+            for header, value in header_items
+            if str(header).lower() == "connection"
+            for token in str(value).split(",")
+            if token.strip()
+        }
+        for header, value in header_items:
             lower = header.lower()
             if lower == "content-length":
                 has_content_length = True
                 if skip_content_length:
                     continue
+            if lower in HOP_BY_HOP_HEADERS or lower in connection_headers:
+                continue
             if lower in {
-                "transfer-encoding",
-                "connection",
                 "access-control-allow-origin",
                 "access-control-allow-credentials",
                 "access-control-allow-methods",

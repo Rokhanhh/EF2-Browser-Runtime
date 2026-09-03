@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import tempfile
@@ -16,6 +17,24 @@ from .logging_utils import log_bundle, log_error
 
 FORCED_BUNDLE_MODE = "live"
 BUNDLE_INFO_URL_BASE = "https://slime-checkinfo.s3.us-east-1.amazonaws.com/ef2_"
+MANIFEST_MAX_BYTES = 1 * 1024 * 1024
+BUNDLE_MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
+MERGED_ZIP_MAX_BYTES = 512 * 1024 * 1024
+ZIP_MAX_MEMBER_BYTES = 128 * 1024 * 1024
+ZIP_MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
+ZIP_MAX_MEMBERS = 50_000
+ZIP_MAX_COMPRESSION_RATIO = 200
+COPY_CHUNK_BYTES = 1024 * 1024
+VERSION_COMPONENT_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+FILE_COMPONENT_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
 def is_within_directory(path: Path, root: Path) -> bool:
@@ -24,6 +43,60 @@ def is_within_directory(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def validate_manifest_component(value: object, label: str, *, require_zip: bool = False) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Invalid {label}")
+    pattern = FILE_COMPONENT_PATTERN if require_zip else VERSION_COMPONENT_PATTERN
+    if not pattern.fullmatch(value) or value in {".", ".."} or value.endswith((".", " ")):
+        raise ValueError(f"Invalid {label}: {value!r}")
+    if value.split(".", 1)[0].upper() in WINDOWS_RESERVED_NAMES:
+        raise ValueError(f"Invalid {label}: {value!r}")
+    if require_zip and not value.lower().endswith(".zip"):
+        raise ValueError(f"Invalid {label}: expected a .zip file")
+    return value
+
+
+def safe_cache_path(root: Path, *components: str) -> Path:
+    resolved_root = root.resolve()
+    candidate = root.joinpath(*components).resolve()
+    if not is_within_directory(candidate, resolved_root):
+        raise ValueError(f"Cache path escapes its root: {candidate}")
+    return candidate
+
+
+def response_content_length(response: object, maximum: int, label: str) -> int | None:
+    headers = getattr(response, "headers", None)
+    values = headers.get_all("Content-Length", []) if headers is not None else []
+    if len(values) > 1:
+        raise ValueError(f"Duplicate Content-Length for {label}")
+    if not values:
+        return None
+    raw_value = values[0].strip()
+    if not raw_value.isdigit():
+        raise ValueError(f"Invalid Content-Length for {label}")
+    length = int(raw_value)
+    if length > maximum:
+        raise ValueError(f"{label} exceeds the allowed limit")
+    return length
+
+
+def read_limited_stream(source: object, maximum: int, label: str, output: object | None = None) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = source.read(COPY_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > maximum:
+            raise ValueError(f"{label} exceeds the allowed limit")
+        if output is None:
+            chunks.append(chunk)
+        else:
+            output.write(chunk)
+    return b"".join(chunks)
 
 
 def sha256_of_file(path: Path) -> str:
@@ -44,7 +117,14 @@ def fetch_json(url: str) -> dict[str, object]:
         },
     )
     with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+        declared_length = response_content_length(response, MANIFEST_MAX_BYTES, "Manifest")
+        payload = read_limited_stream(response, MANIFEST_MAX_BYTES, "Manifest")
+        if declared_length is not None and len(payload) != declared_length:
+            raise ValueError("Incomplete manifest response")
+        parsed = json.loads(payload.decode("utf-8"))
+        if not isinstance(parsed, dict):
+            raise ValueError("Invalid manifest document")
+        return parsed
 
 
 def download_file(url: str, target_path: Path) -> None:
@@ -56,8 +136,19 @@ def download_file(url: str, target_path: Path) -> None:
             "Pragma": "no-cache",
         },
     )
-    with urllib.request.urlopen(request, timeout=120) as response, target_path.open("wb") as output:
-        shutil.copyfileobj(response, output)
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response, target_path.open("wb") as output:
+            declared_length = response_content_length(response, BUNDLE_MAX_DOWNLOAD_BYTES, "Bundle download")
+            read_limited_stream(response, BUNDLE_MAX_DOWNLOAD_BYTES, "Bundle download", output)
+        actual_length = target_path.stat().st_size
+        if declared_length is not None and actual_length != declared_length:
+            raise ValueError("Incomplete bundle download")
+    except BaseException:
+        try:
+            target_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def verify_checksum(path: Path, checksum: str | None) -> None:
@@ -164,9 +255,53 @@ def cleanup_bundle_versions(
 
 def validate_zip_file(path: Path) -> None:
     with zipfile.ZipFile(path) as archive:
+        validate_zip_members(archive)
         bad_member = archive.testzip()
         if bad_member:
             raise ValueError(f"Corrupt zip member in {path.name}: {bad_member}")
+
+
+def validate_zip_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+    members = archive.infolist()
+    if len(members) > ZIP_MAX_MEMBERS:
+        raise ValueError("ZIP contains too many members")
+
+    total_expanded = 0
+    for member in members:
+        if member.flag_bits & 0x1:
+            raise ValueError(f"Encrypted ZIP member is not supported: {member.filename}")
+        if member.file_size > ZIP_MAX_MEMBER_BYTES:
+            raise ValueError(f"ZIP member exceeds the allowed limit: {member.filename}")
+        total_expanded += member.file_size
+        if total_expanded > ZIP_MAX_EXPANDED_BYTES:
+            raise ValueError("ZIP expanded content exceeds the allowed limit")
+        if member.file_size:
+            if member.compress_size == 0 or member.file_size > member.compress_size * ZIP_MAX_COMPRESSION_RATIO:
+                raise ValueError(f"ZIP member compression ratio exceeds the allowed limit: {member.filename}")
+    return members
+
+
+def copy_zip_member(
+    source_archive: zipfile.ZipFile,
+    member: zipfile.ZipInfo,
+    output_archive: zipfile.ZipFile,
+) -> None:
+    with source_archive.open(member, "r") as source, output_archive.open(
+        member.filename,
+        "w",
+        force_zip64=True,
+    ) as output:
+        copied = 0
+        while True:
+            chunk = source.read(COPY_CHUNK_BYTES)
+            if not chunk:
+                break
+            copied += len(chunk)
+            if copied > ZIP_MAX_MEMBER_BYTES:
+                raise ValueError(f"ZIP member exceeds the allowed limit: {member.filename}")
+            output.write(chunk)
+        if copied != member.file_size:
+            raise ValueError(f"Incomplete ZIP member: {member.filename}")
 
 
 def collect_directory_checksums(root_dir: Path, excluded_files: set[str] | None = None) -> dict[str, str]:
@@ -207,18 +342,25 @@ def set_tree_read_only(root_dir: Path) -> None:
 
 
 def extract_game_bundle_zip(zip_path: Path, target_dir: Path) -> None:
-    if target_dir.exists():
-        remove_tree(target_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    safe_extract_zip(zip_path, target_dir)
-    # Some archives may wrap all files under a single top-level "merged/" folder.
-    # Flatten it so runtime static paths stay rooted at target_dir.
-    merged_wrapper = target_dir / "merged"
-    if merged_wrapper.is_dir():
-        wrapper_items = list(merged_wrapper.iterdir())
-        for item in wrapper_items:
-            shutil.move(str(item), str(target_dir / item.name))
-        remove_tree(merged_wrapper)
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(tempfile.mkdtemp(prefix=f".{target_dir.name}-", dir=target_dir.parent))
+    staged_root = staging_dir / "content"
+    try:
+        staged_root.mkdir()
+        safe_extract_zip(zip_path, staged_root)
+        # Some archives may wrap all files under a single top-level "merged/" folder.
+        # Flatten it so runtime static paths stay rooted at target_dir.
+        merged_wrapper = staged_root / "merged"
+        if merged_wrapper.is_dir():
+            wrapper_items = list(merged_wrapper.iterdir())
+            for item in wrapper_items:
+                shutil.move(str(item), str(staged_root / item.name))
+            remove_tree(merged_wrapper)
+        if target_dir.exists():
+            remove_tree(target_dir)
+        shutil.move(str(staged_root), str(target_dir))
+    finally:
+        remove_tree(staging_dir)
 
 
 def cached_zip_is_valid(
@@ -244,33 +386,45 @@ def merge_bundle_zips(main_zip_path: Path, update_zip_path: Path | None, output_
     if output_zip_path.exists():
         output_zip_path.unlink()
 
-    update_entries: set[str] = set()
-    if update_zip_path:
-        with zipfile.ZipFile(update_zip_path, "r") as update_archive:
-            for member in update_archive.infolist():
-                if member.is_dir():
-                    continue
-                update_entries.add(member.filename)
-
-    with zipfile.ZipFile(output_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as out_archive:
-        with zipfile.ZipFile(main_zip_path, "r") as main_archive:
-            for member in main_archive.infolist():
-                if member.is_dir():
-                    continue
-                arcname = member.filename
-                if arcname in update_entries:
-                    continue
-                payload = main_archive.read(member)
-                out_archive.writestr(arcname, payload)
-
+    try:
+        update_entries: set[str] = set()
         if update_zip_path:
             with zipfile.ZipFile(update_zip_path, "r") as update_archive:
-                for member in update_archive.infolist():
-                    if member.is_dir():
+                update_entries = {
+                    member.filename for member in validate_zip_members(update_archive) if not member.is_dir()
+                }
+
+        merged_member_count = 0
+        merged_expanded_size = 0
+
+        def copy_selected_members(source_path: Path, excluded: set[str] | None = None) -> None:
+            nonlocal merged_member_count, merged_expanded_size
+            with zipfile.ZipFile(source_path, "r") as source_archive:
+                for member in validate_zip_members(source_archive):
+                    if member.is_dir() or (excluded and member.filename in excluded):
                         continue
-                    arcname = member.filename
-                    payload = update_archive.read(member)
-                    out_archive.writestr(arcname, payload)
+                    merged_member_count += 1
+                    merged_expanded_size += member.file_size
+                    if merged_member_count > ZIP_MAX_MEMBERS:
+                        raise ValueError("Merged ZIP contains too many members")
+                    if merged_expanded_size > ZIP_MAX_EXPANDED_BYTES:
+                        raise ValueError("Merged ZIP expanded content exceeds the allowed limit")
+                    copy_zip_member(source_archive, member, out_archive)
+                    if output_zip_path.stat().st_size > MERGED_ZIP_MAX_BYTES:
+                        raise ValueError("Merged ZIP exceeds the allowed limit")
+
+        with zipfile.ZipFile(output_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as out_archive:
+            copy_selected_members(main_zip_path, update_entries)
+            if update_zip_path:
+                copy_selected_members(update_zip_path)
+        if output_zip_path.stat().st_size > MERGED_ZIP_MAX_BYTES:
+            raise ValueError("Merged ZIP exceeds the allowed limit")
+    except BaseException:
+        try:
+            output_zip_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def recover_cached_main_bundle(
@@ -279,16 +433,19 @@ def recover_cached_main_bundle(
     bundle_info: dict[str, object],
     main_info: dict[str, object],
 ) -> dict[str, object] | None:
-    main_file_name = str(main_info.get("fileName") or "")
-    main_version = str(bundle_info.get("mainVersion") or "")
-    if not main_file_name or not main_version:
+    try:
+        main_file_name = validate_manifest_component(
+            main_info.get("fileName"), "mainBundle file name", require_zip=True
+        )
+        main_version = validate_manifest_component(bundle_info.get("mainVersion"), "mainVersion")
+    except ValueError:
         return None
 
     for cached_dir in sorted(cache_root.iterdir(), reverse=True):
         if not cached_dir.is_dir():
             continue
         meta_path = cached_dir / "bundle-meta.json"
-        candidate_path = cached_dir / main_file_name
+        candidate_path = safe_cache_path(cached_dir, main_file_name)
         if not meta_path.exists() or not candidate_path.exists():
             continue
 
@@ -331,16 +488,19 @@ def recover_legacy_bundle(
     if not isinstance(file_info, dict):
         return None
 
-    file_name = str(file_info.get("fileName") or "")
-    version = str(bundle_info.get(version_key) or "")
-    if not file_name or not version:
+    try:
+        file_name = validate_manifest_component(
+            file_info.get("fileName"), f"{bundle_info_key} file name", require_zip=True
+        )
+        version = validate_manifest_component(bundle_info.get(version_key), version_key)
+    except ValueError:
         return None
 
     for cached_dir in sorted(cache_root.iterdir(), reverse=True):
         if not cached_dir.is_dir() or cached_dir.name in {"mainbundle", "updatebundle", "merged"}:
             continue
         meta_path = cached_dir / "bundle-meta.json"
-        candidate_path = cached_dir / file_name
+        candidate_path = safe_cache_path(cached_dir, file_name)
         if not meta_path.exists() or not candidate_path.exists():
             continue
 
@@ -386,14 +546,14 @@ def ensure_cached_bundle_zip(
     if not isinstance(file_info, dict):
         raise ValueError(f"Invalid {bundle_info_key} metadata")
 
-    version = str(bundle_info.get(version_key) or "")
-    file_name = str(file_info.get("fileName") or "")
-    if not version or not file_name:
-        raise ValueError(f"Invalid {bundle_info_key} version or file name")
+    version = validate_manifest_component(bundle_info.get(version_key), version_key)
+    file_name = validate_manifest_component(
+        file_info.get("fileName"), f"{bundle_info_key} file name", require_zip=True
+    )
 
-    final_dir = cache_dir / version
-    final_zip_path = final_dir / file_name
-    meta_path = final_dir / "bundle-meta.json"
+    final_dir = safe_cache_path(cache_dir, version)
+    final_zip_path = safe_cache_path(final_dir, file_name)
+    meta_path = safe_cache_path(final_dir, "bundle-meta.json")
     try:
         meta = cached_zip_is_valid(final_zip_path, meta_path, file_name, bundle_checksum(file_info))
         if meta:
@@ -404,7 +564,7 @@ def ensure_cached_bundle_zip(
         remove_tree(final_dir)
 
     temp_dir = Path(tempfile.mkdtemp(prefix="ef2-runtime-", dir=cache_root))
-    temp_zip_path = temp_dir / file_name
+    temp_zip_path = safe_cache_path(temp_dir, file_name)
     try:
         recovered = recover_legacy_bundle(cache_root, temp_zip_path, bundle_info, bundle_info_key, version_key)
         if recovered:
@@ -483,11 +643,33 @@ def ensure_cached_bundle_zip(
 def safe_extract_zip(zip_path: Path, target_dir: Path) -> None:
     with zipfile.ZipFile(zip_path) as archive:
         target_root = target_dir.resolve()
-        for member in archive.infolist():
+        members = validate_zip_members(archive)
+        for member in members:
             resolved = (target_dir / member.filename).resolve()
             if not is_within_directory(resolved, target_root):
                 raise ValueError(f"Blocked zip traversal: {member.filename}")
-        archive.extractall(target_dir)
+            file_type = (member.external_attr >> 16) & 0o170000
+            if file_type == stat.S_IFLNK:
+                raise ValueError(f"Blocked ZIP symbolic link: {member.filename}")
+
+        for member in members:
+            resolved = (target_dir / member.filename).resolve()
+            if member.is_dir():
+                resolved.mkdir(parents=True, exist_ok=True)
+                continue
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member, "r") as source, resolved.open("wb") as output:
+                copied = 0
+                while True:
+                    chunk = source.read(COPY_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    copied += len(chunk)
+                    if copied > ZIP_MAX_MEMBER_BYTES:
+                        raise ValueError(f"ZIP member exceeds the allowed limit: {member.filename}")
+                    output.write(chunk)
+                if copied != member.file_size:
+                    raise ValueError(f"Incomplete ZIP member: {member.filename}")
 
 
 def prepare_remote_bundle() -> tuple[Path | None, dict[str, object]]:
@@ -508,8 +690,17 @@ def prepare_remote_bundle() -> tuple[Path | None, dict[str, object]]:
             "error": str(error),
         }
 
-    remote_version = str(bundle_info.get("updateVersion") or bundle_info.get("mainVersion") or "0.0.0")
-    main_version = str(bundle_info.get("mainVersion") or "0.0.0")
+    try:
+        main_version = validate_manifest_component(bundle_info.get("mainVersion"), "mainVersion")
+        remote_version_value = bundle_info.get("updateVersion") or bundle_info.get("mainVersion")
+        remote_version = validate_manifest_component(remote_version_value, "updateVersion")
+    except ValueError as error:
+        log_error("BUNDLE", f"Invalid bundle metadata: {error}")
+        return None, {
+            "source": "remote-error",
+            "bundleInfoUrl": bundle_info_url,
+            "error": str(error),
+        }
     main_cache_root = cache_root / "mainbundle"
     update_cache_root = cache_root / "updatebundle"
     merged_cache_root = cache_root / "merged"
@@ -517,11 +708,11 @@ def prepare_remote_bundle() -> tuple[Path | None, dict[str, object]]:
     update_cache_root.mkdir(parents=True, exist_ok=True)
     merged_cache_root.mkdir(parents=True, exist_ok=True)
 
-    merged_dir = merged_cache_root / remote_version
-    meta_path = merged_dir / "bundle-meta.json"
+    merged_dir = safe_cache_path(merged_cache_root, remote_version)
+    meta_path = safe_cache_path(merged_dir, "bundle-meta.json")
     mounted_cache_root = cache_root / "mounted"
     mounted_cache_root.mkdir(parents=True, exist_ok=True)
-    mounted_dir = mounted_cache_root / remote_version
+    mounted_dir = safe_cache_path(mounted_cache_root, remote_version)
     if merged_dir.exists():
         log_bundle("Always rebuilding merged bundle at startup")
         remove_tree(merged_dir)
@@ -561,7 +752,7 @@ def prepare_remote_bundle() -> tuple[Path | None, dict[str, object]]:
         if merged_dir.exists():
             remove_tree(merged_dir)
         merged_dir.mkdir(parents=True, exist_ok=True)
-        game_bundle_zip = merged_dir / "GameBundle.zip"
+        game_bundle_zip = safe_cache_path(merged_dir, "GameBundle.zip")
         merge_bundle_zips(main_zip_path, update_zip_path, game_bundle_zip)
         meta = {
             "source": "remote",

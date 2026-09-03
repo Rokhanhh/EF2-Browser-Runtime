@@ -28,12 +28,43 @@ STOP_HOTKEY_TEXT = "Ctrl+Q"
 STOP_HOTKEY_CHAR = "\x11"
 HEARTBEAT_INTERVAL_SECONDS = 1
 SERVER_REQUEST_QUEUE_SIZE = 128
+SERVER_MAX_ACTIVE_HANDLERS = 64
 
 
 class ThreadingTCPServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
     request_queue_size = SERVER_REQUEST_QUEUE_SIZE
+
+    def __init__(self, *args, **kwargs) -> None:
+        self._handler_slots = threading.BoundedSemaphore(SERVER_MAX_ACTIVE_HANDLERS)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address) -> None:
+        if not self._handler_slots.acquire(blocking=False):
+            try:
+                request.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Connection: close\r\n"
+                    b"Content-Length: 0\r\n\r\n"
+                )
+            except OSError:
+                pass
+            finally:
+                self.shutdown_request(request)
+            return
+
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._handler_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._handler_slots.release()
 
 
 class ThreadingTCPServerIPv6(ThreadingTCPServer):
