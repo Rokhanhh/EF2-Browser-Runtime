@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import http.client
 import http.server
+import hmac
 import json
 import mimetypes
 import re
+import secrets
 import select
 import socket
 import ssl
@@ -63,6 +65,10 @@ FORCE_GB_BOOTSTRAP_SCRIPT = """
 """.strip()
 INTEGRITY_CHECK_PATHS = {"/", "/index.html", "/game-manifest.json", "/assets/index.js"}
 RUNTIME_SETTINGS_PATH = "/__ef_runtime_settings__"
+RUNTIME_TOKEN_HEADER = "X-EF-Runtime-Token"
+RUNTIME_WS_TOKEN_PROTOCOL_PREFIX = "ef-runtime-token."
+RUNTIME_ACCESS_TOKEN = secrets.token_urlsafe(32)
+LOCAL_ALLOWED_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -91,6 +97,49 @@ def is_client_disconnect(error: BaseException) -> bool:
     return False
 
 
+def parse_local_authority(authority: str, expected_port: int) -> tuple[str, int] | None:
+    if not authority or any(character.isspace() for character in authority):
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(f"//{authority}")
+        port = parsed.port if parsed.port is not None else 80
+    except ValueError:
+        return None
+    hostname = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme
+        or not parsed.netloc
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+        or hostname not in LOCAL_ALLOWED_HOSTS
+        or port != expected_port
+    ):
+        return None
+    return hostname, port
+
+
+def origin_matches_authority(origin: str, authority: tuple[str, int]) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(origin)
+        port = parsed.port if parsed.port is not None else 80
+    except ValueError:
+        return False
+    hostname, expected_port = authority
+    return (
+        parsed.scheme.lower() == "http"
+        and (parsed.hostname or "").lower() == hostname
+        and port == expected_port
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.path
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
 def close_upstream_connection(connection: http.client.HTTPConnection) -> None:
     try:
         connection.close()
@@ -104,6 +153,7 @@ def build_browser_runtime_config() -> dict[str, object]:
         "remoteWsOrigin": REMOTE_WS_ORIGIN,
         "proxyPrefix": PROXY_PREFIX,
         "wsProxyPrefix": WS_PROXY_PREFIX,
+        "runtimeToken": RUNTIME_ACCESS_TOKEN,
         "appBasePath": APP_BASE_PATH,
         "openAtStart": get_runtime_flags()["openAtStart"],
         "gameViewport": get_game_viewport_config(),
@@ -215,12 +265,67 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, directory: str | None = None, **kwargs):
         super().__init__(*args, directory=str(WEB_ROOT), **kwargs)
 
+    def parse_request(self) -> bool:
+        if not super().parse_request():
+            return False
+
+        host_values = self.headers.get_all("Host", [])
+        server_port = int(self.server.server_address[1])
+        authority = parse_local_authority(host_values[0], server_port) if len(host_values) == 1 else None
+        if authority is None:
+            self.close_connection = True
+            self.send_error(403)
+            return False
+        self._local_authority = authority
+
+        if self.command != "OPTIONS" and self._is_protected_runtime_path() and not self._is_runtime_request_authorized():
+            self.close_connection = True
+            self.send_error(403)
+            return False
+        return True
+
     def end_headers(self) -> None:
         self._set_runtime_cache_headers()
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
         super().end_headers()
+
+    def _is_protected_runtime_path(self) -> bool:
+        request_path = urllib.parse.urlsplit(getattr(self, "path", "")).path
+        return (
+            request_path == RUNTIME_SETTINGS_PATH
+            or request_path.startswith(PROXY_PREFIX)
+            or request_path.startswith(WS_PROXY_PREFIX)
+        )
+
+    def _websocket_protocols(self) -> list[str]:
+        return [
+            protocol.strip()
+            for value in self.headers.get_all("Sec-WebSocket-Protocol", [])
+            for protocol in value.split(",")
+            if protocol.strip()
+        ]
+
+    def _has_valid_runtime_token(self) -> bool:
+        request_path = urllib.parse.urlsplit(getattr(self, "path", "")).path
+        if request_path.startswith(WS_PROXY_PREFIX):
+            expected_protocol = f"{RUNTIME_WS_TOKEN_PROTOCOL_PREFIX}{RUNTIME_ACCESS_TOKEN}"
+            matching_protocols = [
+                protocol for protocol in self._websocket_protocols() if protocol.startswith(RUNTIME_WS_TOKEN_PROTOCOL_PREFIX)
+            ]
+            return len(matching_protocols) == 1 and hmac.compare_digest(matching_protocols[0], expected_protocol)
+
+        token_values = self.headers.get_all(RUNTIME_TOKEN_HEADER, [])
+        return len(token_values) == 1 and hmac.compare_digest(token_values[0], RUNTIME_ACCESS_TOKEN)
+
+    def _is_runtime_request_authorized(self) -> bool:
+        if not self._has_valid_runtime_token():
+            return False
+        origin_values = self.headers.get_all("Origin", [])
+        if not origin_values:
+            return True
+        if len(origin_values) != 1:
+            return False
+        authority = getattr(self, "_local_authority", None)
+        return authority is not None and origin_matches_authority(origin_values[0], authority)
 
     def _set_runtime_cache_headers(self) -> None:
         request_path = urllib.parse.urlsplit(getattr(self, "path", "")).path
@@ -278,7 +383,9 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         return str(choose_static_path(path))
 
     def do_OPTIONS(self) -> None:
-        self.send_response(204)
+        self.send_response(405)
+        self.send_header("Allow", "GET, HEAD, POST, PUT, PATCH, DELETE")
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_GET(self) -> None:
@@ -612,7 +719,7 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
             lower = header.lower()
             if lower in HOP_BY_HOP_HEADERS or lower in connection_headers:
                 continue
-            if lower in {"host", "origin", "referer", "content-length"}:
+            if lower in {"host", "origin", "referer", "content-length", RUNTIME_TOKEN_HEADER.lower()}:
                 continue
             request_headers[header] = value
 
@@ -857,11 +964,19 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         host = upstream.netloc
         request_lines.append(f"Host: {host}")
 
-        skipped_headers = {"host", "origin", "connection", "upgrade"}
+        skipped_headers = {"host", "origin", "connection", "upgrade", "sec-websocket-protocol"}
         for header, value in self.headers.items():
             if header.lower() in skipped_headers:
                 continue
             request_lines.append(f"{header}: {value}")
+
+        upstream_protocols = [
+            protocol
+            for protocol in self._websocket_protocols()
+            if not protocol.startswith(RUNTIME_WS_TOKEN_PROTOCOL_PREFIX)
+        ]
+        if upstream_protocols:
+            request_lines.append(f"Sec-WebSocket-Protocol: {', '.join(upstream_protocols)}")
 
         request_lines.extend(
             [

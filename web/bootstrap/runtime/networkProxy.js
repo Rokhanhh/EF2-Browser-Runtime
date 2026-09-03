@@ -1,4 +1,12 @@
-import { PROXY_PREFIX, REMOTE_ORIGIN, REMOTE_WS_ORIGIN, WS_PROXY_PREFIX } from "./config.js";
+import {
+    PROXY_PREFIX,
+    REMOTE_ORIGIN,
+    REMOTE_WS_ORIGIN,
+    RUNTIME_TOKEN,
+    RUNTIME_TOKEN_HEADER,
+    RUNTIME_WS_TOKEN_PROTOCOL_PREFIX,
+    WS_PROXY_PREFIX
+} from "./config.js";
 import {
     createBodyReaders,
     hasMatchingListeners,
@@ -36,6 +44,22 @@ function proxiedWebSocketUrl(input) {
     return `${localScheme}//${window.location.host}${WS_PROXY_PREFIX}?target=${encodeURIComponent(url)}`;
 }
 
+function runtimeWebSocketProtocols(protocols) {
+    if (!RUNTIME_TOKEN) {
+        return protocols;
+    }
+    const tokenProtocol = `${RUNTIME_WS_TOKEN_PROTOCOL_PREFIX}${RUNTIME_TOKEN}`;
+    const originalProtocols = Array.isArray(protocols)
+        ? protocols
+        : typeof protocols === "string"
+            ? [protocols]
+            : [];
+    return [
+        tokenProtocol,
+        ...originalProtocols.filter(protocol => !String(protocol).startsWith(RUNTIME_WS_TOKEN_PROTOCOL_PREFIX))
+    ];
+}
+
 function extractUrl(input) {
     if (typeof input === "string") {
         return input;
@@ -57,6 +81,33 @@ function extractMethod(input, init) {
         return input.method.toUpperCase();
     }
     return "GET";
+}
+
+async function buildProxiedFetchRequest(input, init, proxied) {
+    const effectiveRequest = new Request(input, init);
+    const headers = new Headers(effectiveRequest.headers);
+    headers.set(RUNTIME_TOKEN_HEADER, RUNTIME_TOKEN);
+    const proxyInit = {
+        method: effectiveRequest.method,
+        headers,
+        credentials: effectiveRequest.credentials,
+        mode: effectiveRequest.mode,
+        cache: effectiveRequest.cache,
+        redirect: effectiveRequest.redirect,
+        referrer: effectiveRequest.referrer,
+        referrerPolicy: effectiveRequest.referrerPolicy,
+        integrity: effectiveRequest.integrity,
+        keepalive: effectiveRequest.keepalive,
+        signal: effectiveRequest.signal
+    };
+
+    if (effectiveRequest.body !== null && !["GET", "HEAD"].includes(effectiveRequest.method)) {
+        // Chromium requires HTTP/2 for streaming uploads. The local runtime speaks
+        // HTTP/1.1, so materialize the body and let fetch send a fixed Content-Length.
+        proxyInit.body = await effectiveRequest.arrayBuffer();
+    }
+
+    return new Request(proxied, proxyInit);
 }
 
 function snapshotHeaders(headers) {
@@ -159,9 +210,8 @@ export function installNetworkProxy() {
             proxiedUrl: typeof proxied === "string" ? proxied : extractUrl(proxied)
         });
 
-        if (typeof Request === "function" && input instanceof Request && typeof proxied === "string") {
-            const effectiveRequest = new Request(input, init);
-            fetchInput = new Request(proxied, effectiveRequest);
+        if (proxied !== input && typeof proxied === "string") {
+            fetchInput = await buildProxiedFetchRequest(input, init, proxied);
             fetchInit = undefined;
         }
 
@@ -201,12 +251,13 @@ export function installNetworkProxy() {
     if (typeof NativeWebSocket === "function" && !NativeWebSocket.__efPatched) {
         const PatchedWebSocket = function patchedWebSocket(url, protocols) {
             const proxied = proxiedWebSocketUrl(url);
+            const nativeProtocols = proxied !== url ? runtimeWebSocketProtocols(protocols) : protocols;
             if (proxied !== url) {
                 console.info("[ef-runtime] WebSocket proxied.", { from: url, to: proxied });
             }
-            const socket = protocols === undefined
+            const socket = nativeProtocols === undefined
                 ? new NativeWebSocket(proxied)
-                : new NativeWebSocket(proxied, protocols);
+                : new NativeWebSocket(proxied, nativeProtocols);
             installSocketObservers(socket, { url: extractUrl(url) || String(url || ""), proxied, protocols });
             return socket;
         };
@@ -231,11 +282,13 @@ export function installNetworkProxy() {
 
     const nativeOpen = NativeXHR.prototype.open;
     const nativeSend = NativeXHR.prototype.send;
+    const nativeSetRequestHeader = NativeXHR.prototype.setRequestHeader;
     NativeXHR.prototype.open = function patchedOpen(method, url, ...rest) {
         this.__efOriginalMethod = String(method || "GET").toUpperCase();
         this.__efOriginalUrl = extractUrl(url);
         const proxied = proxiedUrl(url);
         this.__efProxiedUrl = typeof proxied === "string" ? proxied : extractUrl(proxied);
+        this.__efUsesRuntimeProxy = proxied !== url;
         return nativeOpen.call(this, method, proxied, ...rest);
     };
 
@@ -250,6 +303,10 @@ export function installNetworkProxy() {
             url: originalUrl,
             proxiedUrl
         });
+
+        if (this.__efUsesRuntimeProxy) {
+            nativeSetRequestHeader.call(this, RUNTIME_TOKEN_HEADER, RUNTIME_TOKEN);
+        }
 
         const handleLoadEnd = () => {
             if (this.readyState !== 4) {

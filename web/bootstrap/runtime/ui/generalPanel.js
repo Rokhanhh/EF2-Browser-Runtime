@@ -1,4 +1,5 @@
 import { escapeHtml } from "./html.js";
+import { RUNTIME_TOKEN, RUNTIME_TOKEN_HEADER } from "../config.js";
 
 const RUNTIME_SETTINGS_URL = "/__ef_runtime_settings__";
 const PRESET_LABELS = {
@@ -156,7 +157,8 @@ export function bindGeneralSettingsControls(node) {
             const response = await fetch(RUNTIME_SETTINGS_URL, {
                 method: "POST",
                 headers: {
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
+                    [RUNTIME_TOKEN_HEADER]: RUNTIME_TOKEN
                 },
                 body: JSON.stringify({ openAtStart: nextValue })
             });
@@ -184,7 +186,8 @@ export function bindGeneralSettingsControls(node) {
             const response = await fetch(RUNTIME_SETTINGS_URL, {
                 method: "POST",
                 headers: {
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
+                    [RUNTIME_TOKEN_HEADER]: RUNTIME_TOKEN
                 },
                 body: JSON.stringify({ gameViewportPreset: nextValue })
             });

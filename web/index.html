@@ -14,6 +14,8 @@
             const runtimeConfig = window.__EF_RUNTIME_CONFIG__ || {};
             const remoteOrigin = runtimeConfig.remoteWsOrigin;
             const proxyPrefix = runtimeConfig.wsProxyPrefix;
+            const runtimeToken = typeof runtimeConfig.runtimeToken === "string" ? runtimeConfig.runtimeToken : "";
+            const runtimeTokenProtocolPrefix = "ef-runtime-token.";
             const NativeWebSocket = window.WebSocket;
             if (!remoteOrigin || !proxyPrefix || typeof NativeWebSocket !== "function" || NativeWebSocket.__efPatched) {
                 return;
@@ -30,12 +32,29 @@
                 return proxied;
             }
 
+            function runtimeWebSocketProtocols(protocols) {
+                if (!runtimeToken) {
+                    return protocols;
+                }
+                const tokenProtocol = `${runtimeTokenProtocolPrefix}${runtimeToken}`;
+                const originalProtocols = Array.isArray(protocols)
+                    ? protocols
+                    : typeof protocols === "string"
+                        ? [protocols]
+                        : [];
+                return [
+                    tokenProtocol,
+                    ...originalProtocols.filter(protocol => !String(protocol).startsWith(runtimeTokenProtocolPrefix))
+                ];
+            }
+
             const PatchedWebSocket = function patchedWebSocket(url, protocols) {
                 const proxied = proxiedWebSocketUrl(url);
-                if (protocols === undefined) {
+                const nativeProtocols = proxied !== url ? runtimeWebSocketProtocols(protocols) : protocols;
+                if (nativeProtocols === undefined) {
                     return new NativeWebSocket(proxied);
                 }
-                return new NativeWebSocket(proxied, protocols);
+                return new NativeWebSocket(proxied, nativeProtocols);
             };
 
             PatchedWebSocket.prototype = NativeWebSocket.prototype;
