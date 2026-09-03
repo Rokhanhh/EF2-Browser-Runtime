@@ -10,8 +10,10 @@ import secrets
 import select
 import socket
 import ssl
+import time
 import urllib.parse
 import threading
+from dataclasses import dataclass, field
 
 from . import state
 from .config import (
@@ -80,6 +82,25 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+WS_RELAY_READ_SIZE = 64 * 1024
+WS_RELAY_BUFFER_LIMIT_BYTES = 1024 * 1024
+WS_RELAY_WRITE_STALL_TIMEOUT_SECONDS = 15
+WS_RELAY_IDLE_TIMEOUT_SECONDS = 120
+WS_RELAY_CLOSE_GRACE_SECONDS = 5
+WS_RELAY_POLL_INTERVAL_SECONDS = 1
+WS_RELAY_LOGGED_CLOSE_REASONS = frozenset({"idle", "stalled", "reset", "tls", "shutdown"})
+
+
+@dataclass
+class WebSocketRelayDirection:
+    source: socket.socket
+    target: socket.socket
+    pending: bytearray = field(default_factory=bytearray)
+    source_eof: bool = False
+    write_shutdown: bool = False
+    read_waits_for_write: bool = False
+    write_waits_for_read: bool = False
+    last_write_progress: float | None = None
 
 
 class ProxyRequestBodyError(Exception):
@@ -943,14 +964,20 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
 
         try:
             self._send_websocket_handshake(upstream_socket, upstream, upstream_path, remote_origin)
-            self._relay_websocket(upstream_socket)
+            close_reason = self._relay_websocket(upstream_socket)
+            if close_reason in WS_RELAY_LOGGED_CLOSE_REASONS:
+                log_error("WS", f"relay closed: {close_reason}")
         except Exception as error:
             if not is_client_disconnect(error):
                 log_error("WS", str(error))
         finally:
             try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
                 upstream_socket.close()
-            except Exception:
+            except OSError:
                 pass
 
     def _send_websocket_handshake(
@@ -1002,18 +1029,170 @@ class RuntimeHandler(http.server.SimpleHTTPRequestHandler):
         self.connection.sendall(response)
         upstream_socket.settimeout(None)
 
-    def _relay_websocket(self, upstream_socket: socket.socket) -> None:
-        sockets = [self.connection, upstream_socket]
-        while True:
-            readable, _, _ = select.select(sockets, [], [], 60)
-            if not readable:
-                continue
-            for source in readable:
-                data = source.recv(65536)
-                if not data:
-                    return
-                target = upstream_socket if source is self.connection else self.connection
-                target.sendall(data)
+    def _relay_websocket(self, upstream_socket: socket.socket) -> str:
+        client_socket = self.connection
+        sockets = {client_socket, upstream_socket}
+        directions = (
+            WebSocketRelayDirection(client_socket, upstream_socket),
+            WebSocketRelayDirection(upstream_socket, client_socket),
+        )
+        now = time.monotonic()
+        last_activity = now
+        closing_started: float | None = None
+        stop_event = getattr(self.server, "runtime_stop_event", None)
+
+        client_socket.setblocking(False)
+        upstream_socket.setblocking(False)
+
+        try:
+            while True:
+                now = time.monotonic()
+                if stop_event is not None and stop_event.is_set():
+                    return "shutdown"
+                if now - last_activity >= WS_RELAY_IDLE_TIMEOUT_SECONDS:
+                    return "idle"
+                if closing_started is not None and now - closing_started >= WS_RELAY_CLOSE_GRACE_SECONDS:
+                    return "peer_closed"
+                for direction in directions:
+                    if (
+                        direction.pending
+                        and direction.last_write_progress is not None
+                        and now - direction.last_write_progress >= WS_RELAY_WRITE_STALL_TIMEOUT_SECONDS
+                    ):
+                        return "stalled"
+
+                if all(direction.source_eof for direction in directions) and all(
+                    not direction.pending for direction in directions
+                ):
+                    return "peer_closed"
+
+                read_interest: set[socket.socket] = set()
+                write_interest: set[socket.socket] = set()
+                for direction in directions:
+                    if not direction.source_eof and len(direction.pending) < WS_RELAY_BUFFER_LIMIT_BYTES:
+                        if direction.read_waits_for_write:
+                            write_interest.add(direction.source)
+                        else:
+                            read_interest.add(direction.source)
+                    if direction.pending:
+                        if direction.write_waits_for_read:
+                            read_interest.add(direction.target)
+                        else:
+                            write_interest.add(direction.target)
+
+                buffered_tls_reads: set[socket.socket] = set()
+                for relay_socket in read_interest:
+                    if isinstance(relay_socket, ssl.SSLSocket):
+                        try:
+                            if relay_socket.pending() > 0:
+                                buffered_tls_reads.add(relay_socket)
+                        except (OSError, ssl.SSLError):
+                            return "tls"
+
+                timeout = 0 if buffered_tls_reads else WS_RELAY_POLL_INTERVAL_SECONDS
+                try:
+                    readable, writable, exceptional = select.select(
+                        list(read_interest),
+                        list(write_interest),
+                        list(sockets),
+                        timeout,
+                    )
+                except InterruptedError:
+                    continue
+                except (OSError, ValueError):
+                    return "reset"
+
+                readable_set = set(readable) | buffered_tls_reads
+                writable_set = set(writable)
+                if exceptional:
+                    return "reset"
+
+                for direction in directions:
+                    if direction.source_eof or len(direction.pending) >= WS_RELAY_BUFFER_LIMIT_BYTES:
+                        continue
+                    ready_set = writable_set if direction.read_waits_for_write else readable_set
+                    if direction.source not in ready_set:
+                        continue
+                    read_size = min(
+                        WS_RELAY_READ_SIZE,
+                        WS_RELAY_BUFFER_LIMIT_BYTES - len(direction.pending),
+                    )
+                    try:
+                        data = direction.source.recv(read_size)
+                    except ssl.SSLWantReadError:
+                        direction.read_waits_for_write = False
+                        continue
+                    except ssl.SSLWantWriteError:
+                        direction.read_waits_for_write = True
+                        continue
+                    except ssl.SSLZeroReturnError:
+                        data = b""
+                    except (BlockingIOError, InterruptedError):
+                        continue
+                    except ssl.SSLError:
+                        return "tls"
+                    except (ConnectionError, OSError):
+                        return "reset"
+
+                    direction.read_waits_for_write = False
+                    if not data:
+                        direction.source_eof = True
+                        if closing_started is None:
+                            closing_started = time.monotonic()
+                        continue
+
+                    was_empty = not direction.pending
+                    direction.pending.extend(data)
+                    now = time.monotonic()
+                    last_activity = now
+                    if was_empty:
+                        direction.last_write_progress = now
+
+                for direction in directions:
+                    if not direction.pending:
+                        continue
+                    ready_set = readable_set if direction.write_waits_for_read else writable_set
+                    if direction.target not in ready_set:
+                        continue
+                    try:
+                        written = direction.target.send(direction.pending)
+                    except ssl.SSLWantReadError:
+                        direction.write_waits_for_read = True
+                        continue
+                    except ssl.SSLWantWriteError:
+                        direction.write_waits_for_read = False
+                        continue
+                    except (BlockingIOError, InterruptedError):
+                        continue
+                    except ssl.SSLError:
+                        return "tls"
+                    except (ConnectionError, OSError):
+                        return "reset"
+
+                    direction.write_waits_for_read = False
+                    if written <= 0:
+                        return "reset"
+                    del direction.pending[:written]
+                    now = time.monotonic()
+                    last_activity = now
+                    direction.last_write_progress = now if direction.pending else None
+
+                for direction in directions:
+                    if not direction.source_eof or direction.pending or direction.write_shutdown:
+                        continue
+                    direction.write_shutdown = True
+                    if isinstance(direction.target, ssl.SSLSocket):
+                        continue
+                    try:
+                        direction.target.shutdown(socket.SHUT_WR)
+                    except OSError:
+                        pass
+        finally:
+            for relay_socket in sockets:
+                try:
+                    relay_socket.setblocking(True)
+                except OSError:
+                    pass
 
     def _write_streaming_response(
         self,

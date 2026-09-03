@@ -38,6 +38,7 @@ class ThreadingTCPServer(socketserver.ThreadingTCPServer):
 
     def __init__(self, *args, **kwargs) -> None:
         self._handler_slots = threading.BoundedSemaphore(SERVER_MAX_ACTIVE_HANDLERS)
+        self.runtime_stop_event = threading.Event()
         super().__init__(*args, **kwargs)
 
     def process_request(self, request, client_address) -> None:
@@ -163,11 +164,13 @@ def main() -> None:
 
     with contextlib.ExitStack() as stack:
         httpd = stack.enter_context(ThreadingTCPServer(("127.0.0.1", args.port), RuntimeHandler))
+        httpd.runtime_stop_event = stop_event
         ipv6_httpd = None
         ipv6_thread = None
         if getattr(socket, "has_ipv6", False):
             try:
                 ipv6_httpd = stack.enter_context(ThreadingTCPServerIPv6(("::1", args.port), RuntimeHandler))
+                ipv6_httpd.runtime_stop_event = stop_event
                 ipv6_thread = threading.Thread(target=ipv6_httpd.serve_forever, name="runtime-http-ipv6", daemon=True)
                 ipv6_thread.start()
             except OSError as error:
