@@ -52,7 +52,7 @@ async function bootstrapRuntime() {
 
     setLoaderState("loading-module");
     setStatus("Loading game module...");
-    await loadModule(manifest.entry, manifest.version);
+    await loadModule(manifest.entry);
 
     setLoaderState("starting-game");
     setStatus("Starting game...");

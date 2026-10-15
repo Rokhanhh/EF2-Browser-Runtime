@@ -30,43 +30,10 @@ export function loadCssFile(cssPath, cacheToken) {
     });
 }
 
-export function loadModule(modulePath, cacheToken) {
-    if (!window.__EF_GAME_INIT_OPTIONS__) {
-        return loadModuleScriptTag(modulePath, cacheToken);
-    }
-
-    return loadPatchedModule(modulePath, cacheToken);
-}
-
-async function loadPatchedModule(modulePath, cacheToken) {
-    const moduleUrl = `./${modulePath}?v=${encodeURIComponent(cacheToken || Date.now().toString())}`;
-    const response = await fetch(moduleUrl, { cache: "no-store" });
-    if (!response.ok) {
-        throw new Error(`Could not load ${modulePath} (${response.status})`);
-    }
-
-    const patchedSource = patchGameInitOptions(await response.text());
-    const blobUrl = URL.createObjectURL(new Blob([patchedSource], { type: "text/javascript" }));
-    try {
-        await loadModuleScriptUrl(blobUrl, modulePath);
-    } finally {
-        URL.revokeObjectURL(blobUrl);
-    }
-}
-
-function patchGameInitOptions(source) {
-    const patched = source.replace(
-        /await ([A-Za-z_$][\w$]*)\.init\(\),await WL\.getInstance\(\)\.initialize\(\)/,
-        "await $1.init(window.__EF_GAME_INIT_OPTIONS__||{}),await WL.getInstance().initialize()"
-    );
-    if (patched === source) {
-        console.warn("[ef-runtime] could not patch game init options.");
-    }
-    return patched;
-}
-
-function loadModuleScriptTag(modulePath, cacheToken) {
-    return loadModuleScriptUrl(`./${modulePath}?v=${encodeURIComponent(cacheToken || Date.now().toString())}`, modulePath);
+export function loadModule(modulePath) {
+    // Game chunks import ../index.js. Keep the entry URL identical so they share
+    // one module instance and its initialized TextureManager.
+    return loadModuleScriptUrl(`./${modulePath}`, modulePath);
 }
 
 function loadModuleScriptUrl(scriptUrl, modulePath) {
